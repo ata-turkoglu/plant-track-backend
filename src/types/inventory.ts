@@ -22,19 +22,7 @@ export interface WarehouseRow {
   updated_at: string;
 }
 
-export interface PlantRow {
-  id: number;
-  business_id: number;
-  factory_id: number;
-  code: string;
-  name: string;
-  city: string | null;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface BusinessRow {
+export interface OrganizationRow {
   id: number;
   code: string;
   name: string;
@@ -44,11 +32,13 @@ export interface BusinessRow {
   updated_at: string;
 }
 
-export interface FactoryRow {
+export interface OrganizationUnitRow {
   id: number;
-  business_id: number;
+  organization_id: number;
+  parent_unit_id: number | null;
   code: string;
   name: string;
+  kind: string | null;
   city: string | null;
   is_active: boolean;
   created_at: string;

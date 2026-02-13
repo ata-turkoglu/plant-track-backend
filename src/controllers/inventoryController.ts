@@ -55,6 +55,124 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
   res.status(201).json({ success: true, data: created });
 };
 
+export const listOrganizations = async (_req: Request, res: Response): Promise<void> => {
+  const organizations = await inventoryService.listOrganizations();
+  res.status(200).json({ success: true, data: organizations });
+};
+
+export const createOrganization = async (req: Request, res: Response): Promise<void> => {
+  const { code, name, city, isActive } = req.body as {
+    code?: string;
+    name?: string;
+    city?: string;
+    isActive?: boolean;
+  };
+  if (!code || !name) {
+    throw new ApiError(400, 'code and name are required');
+  }
+
+  const created = await inventoryService.createOrganization({
+    code,
+    name,
+    city: toOptionalString(city),
+    isActive
+  });
+  res.status(201).json({ success: true, data: created });
+};
+
+export const updateOrganization = async (req: Request, res: Response): Promise<void> => {
+  const id = requirePositiveId(req.params.id, 'id');
+  const { code, name, city, isActive } = req.body as {
+    code?: string;
+    name?: string;
+    city?: string;
+    isActive?: boolean;
+  };
+
+  const updated = await inventoryService.updateOrganization(id, {
+    code,
+    name,
+    city: city === undefined ? undefined : toOptionalString(city),
+    isActive
+  });
+  res.status(200).json({ success: true, data: updated });
+};
+
+export const deactivateOrganization = async (req: Request, res: Response): Promise<void> => {
+  const id = requirePositiveId(req.params.id, 'id');
+  const updated = await inventoryService.deactivateOrganization(id);
+  res.status(200).json({ success: true, data: updated });
+};
+
+export const listOrganizationUnits = async (_req: Request, res: Response): Promise<void> => {
+  const units = await inventoryService.listOrganizationUnits();
+  res.status(200).json({ success: true, data: units });
+};
+
+export const createOrganizationUnit = async (req: Request, res: Response): Promise<void> => {
+  const { organizationId, parentUnitId, code, name, kind, city, isActive } = req.body as {
+    organizationId?: number | string;
+    parentUnitId?: number | string | null;
+    code?: string;
+    name?: string;
+    kind?: string;
+    city?: string;
+    isActive?: boolean;
+  };
+  if (!organizationId || !code || !name) {
+    throw new ApiError(400, 'organizationId, code and name are required');
+  }
+
+  const created = await inventoryService.createOrganizationUnit({
+    organizationId: requirePositiveId(organizationId, 'organizationId'),
+    parentUnitId:
+      parentUnitId === undefined || parentUnitId === null || parentUnitId === ''
+        ? undefined
+        : requirePositiveId(parentUnitId, 'parentUnitId'),
+    code,
+    name,
+    kind: toOptionalString(kind),
+    city: toOptionalString(city),
+    isActive
+  });
+  res.status(201).json({ success: true, data: created });
+};
+
+export const updateOrganizationUnit = async (req: Request, res: Response): Promise<void> => {
+  const id = requirePositiveId(req.params.id, 'id');
+  const { organizationId, parentUnitId, code, name, kind, city, isActive } = req.body as {
+    organizationId?: number | string;
+    parentUnitId?: number | string | null;
+    code?: string;
+    name?: string;
+    kind?: string;
+    city?: string;
+    isActive?: boolean;
+  };
+
+  const updated = await inventoryService.updateOrganizationUnit(id, {
+    organizationId: organizationId === undefined ? undefined : requirePositiveId(organizationId, 'organizationId'),
+    parentUnitId:
+      parentUnitId === undefined
+        ? undefined
+        : parentUnitId === null || parentUnitId === ''
+          ? null
+          : requirePositiveId(parentUnitId, 'parentUnitId'),
+    code,
+    name,
+    kind: kind === undefined ? undefined : toOptionalString(kind),
+    city: city === undefined ? undefined : toOptionalString(city),
+    isActive
+  });
+  res.status(200).json({ success: true, data: updated });
+};
+
+export const deactivateOrganizationUnit = async (req: Request, res: Response): Promise<void> => {
+  const id = requirePositiveId(req.params.id, 'id');
+  const updated = await inventoryService.deactivateOrganizationUnit(id);
+  res.status(200).json({ success: true, data: updated });
+};
+
 export const listWarehouses = async (_req: Request, res: Response): Promise<void> => {
   const warehouses = await inventoryService.listWarehouses();
   res.status(200).json({ success: true, data: warehouses });
@@ -69,167 +187,6 @@ export const createWarehouse = async (req: Request, res: Response): Promise<void
   const created = await inventoryService.createWarehouse({ name, code });
   res.status(201).json({ success: true, data: created });
 };
-
-export const listBusinesses = async (_req: Request, res: Response): Promise<void> => {
-  const businesses = await inventoryService.listBusinesses();
-  res.status(200).json({ success: true, data: businesses });
-};
-
-export const createBusiness = async (req: Request, res: Response): Promise<void> => {
-  const { code, name, city, isActive } = req.body as {
-    code?: string;
-    name?: string;
-    city?: string;
-    isActive?: boolean;
-  };
-  if (!code || !name) {
-    throw new ApiError(400, 'code and name are required');
-  }
-
-  const created = await inventoryService.createBusiness({
-    code,
-    name,
-    city: toOptionalString(city),
-    isActive
-  });
-  res.status(201).json({ success: true, data: created });
-};
-
-export const updateBusiness = async (req: Request, res: Response): Promise<void> => {
-  const id = requirePositiveId(req.params.id, 'id');
-  const { code, name, city, isActive } = req.body as {
-    code?: string;
-    name?: string;
-    city?: string;
-    isActive?: boolean;
-  };
-
-  const updated = await inventoryService.updateBusiness(id, {
-    code,
-    name,
-    city: city === undefined ? undefined : toOptionalString(city),
-    isActive
-  });
-  res.status(200).json({ success: true, data: updated });
-};
-
-export const deactivateBusiness = async (req: Request, res: Response): Promise<void> => {
-  const id = requirePositiveId(req.params.id, 'id');
-  const updated = await inventoryService.deactivateBusiness(id);
-  res.status(200).json({ success: true, data: updated });
-};
-
-export const listFactories = async (_req: Request, res: Response): Promise<void> => {
-  const factories = await inventoryService.listFactories();
-  res.status(200).json({ success: true, data: factories });
-};
-
-export const createFactory = async (req: Request, res: Response): Promise<void> => {
-  const { businessId, code, name, city, isActive } = req.body as {
-    businessId?: number | string;
-    code?: string;
-    name?: string;
-    city?: string;
-    isActive?: boolean;
-  };
-  if (!businessId || !code || !name) {
-    throw new ApiError(400, 'businessId, code and name are required');
-  }
-
-  const created = await inventoryService.createFactory({
-    businessId: requirePositiveId(businessId, 'businessId'),
-    code,
-    name,
-    city: toOptionalString(city),
-    isActive
-  });
-  res.status(201).json({ success: true, data: created });
-};
-
-export const updateFactory = async (req: Request, res: Response): Promise<void> => {
-  const id = requirePositiveId(req.params.id, 'id');
-  const { businessId, code, name, city, isActive } = req.body as {
-    businessId?: number | string;
-    code?: string;
-    name?: string;
-    city?: string;
-    isActive?: boolean;
-  };
-
-  const updated = await inventoryService.updateFactory(id, {
-    businessId: businessId === undefined ? undefined : requirePositiveId(businessId, 'businessId'),
-    code,
-    name,
-    city: city === undefined ? undefined : toOptionalString(city),
-    isActive
-  });
-  res.status(200).json({ success: true, data: updated });
-};
-
-export const deactivateFactory = async (req: Request, res: Response): Promise<void> => {
-  const id = requirePositiveId(req.params.id, 'id');
-  const updated = await inventoryService.deactivateFactory(id);
-  res.status(200).json({ success: true, data: updated });
-};
-
-export const listFacilities = async (_req: Request, res: Response): Promise<void> => {
-  const facilities = await inventoryService.listFacilities();
-  res.status(200).json({ success: true, data: facilities });
-};
-
-export const createFacility = async (req: Request, res: Response): Promise<void> => {
-  const { factoryId, code, name, city, isActive } = req.body as {
-    factoryId?: number | string;
-    code?: string;
-    name?: string;
-    city?: string;
-    isActive?: boolean;
-  };
-  if (!factoryId || !code || !name) {
-    throw new ApiError(400, 'factoryId, code and name are required');
-  }
-
-  const created = await inventoryService.createFacility({
-    factoryId: requirePositiveId(factoryId, 'factoryId'),
-    code,
-    name,
-    city: toOptionalString(city),
-    isActive
-  });
-  res.status(201).json({ success: true, data: created });
-};
-
-export const updateFacility = async (req: Request, res: Response): Promise<void> => {
-  const id = requirePositiveId(req.params.id, 'id');
-  const { factoryId, code, name, city, isActive } = req.body as {
-    factoryId?: number | string;
-    code?: string;
-    name?: string;
-    city?: string;
-    isActive?: boolean;
-  };
-
-  const updated = await inventoryService.updateFacility(id, {
-    factoryId: factoryId === undefined ? undefined : requirePositiveId(factoryId, 'factoryId'),
-    code,
-    name,
-    city: city === undefined ? undefined : toOptionalString(city),
-    isActive
-  });
-  res.status(200).json({ success: true, data: updated });
-};
-
-export const deactivateFacility = async (req: Request, res: Response): Promise<void> => {
-  const id = requirePositiveId(req.params.id, 'id');
-  const updated = await inventoryService.deactivateFacility(id);
-  res.status(200).json({ success: true, data: updated });
-};
-
-// Backward compatibility aliases.
-export const listPlants = listFacilities;
-export const createPlant = createFacility;
-export const updatePlant = updateFacility;
-export const deactivatePlant = deactivateFacility;
 
 export const createStockTransaction = async (req: Request, res: Response): Promise<void> => {
   const createdBy = req.user?.userId;

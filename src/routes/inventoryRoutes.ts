@@ -1,29 +1,21 @@
 import { Router } from 'express';
 import {
-  createBusiness,
-  createFactory,
-  createFacility,
-  createPlant,
+  createOrganization,
+  createOrganizationUnit,
   createProduct,
   createStockTransaction,
   createTransfer,
   createWarehouse,
-  deactivateBusiness,
-  deactivateFactory,
-  deactivateFacility,
-  deactivatePlant,
+  deactivateOrganization,
+  deactivateOrganizationUnit,
   getLedger,
   getOnHand,
-  listBusinesses,
-  listFactories,
-  listFacilities,
-  listPlants,
+  listOrganizations,
+  listOrganizationUnits,
   listProducts,
   listWarehouses,
-  updateBusiness,
-  updateFactory,
-  updateFacility,
-  updatePlant
+  updateOrganization,
+  updateOrganizationUnit
 } from '../controllers/inventoryController';
 import { authenticate } from '../middleware/auth';
 import { asyncHandler } from '../middleware/asyncHandler';
@@ -34,29 +26,23 @@ const router = Router();
 router.get('/products', authenticate, asyncHandler(listProducts));
 router.post('/products', authenticate, asyncHandler(createProduct));
 
+router.get('/organizations', authenticate, asyncHandler(listOrganizations));
+router.post('/organizations', authenticate, authorizeRoles('admin'), asyncHandler(createOrganization));
+router.patch('/organizations/:id', authenticate, authorizeRoles('admin'), asyncHandler(updateOrganization));
+router.delete('/organizations/:id', authenticate, authorizeRoles('admin'), asyncHandler(deactivateOrganization));
+
+router.get('/organization-units', authenticate, asyncHandler(listOrganizationUnits));
+router.post('/organization-units', authenticate, authorizeRoles('admin'), asyncHandler(createOrganizationUnit));
+router.patch('/organization-units/:id', authenticate, authorizeRoles('admin'), asyncHandler(updateOrganizationUnit));
+router.delete(
+  '/organization-units/:id',
+  authenticate,
+  authorizeRoles('admin'),
+  asyncHandler(deactivateOrganizationUnit)
+);
+
 router.get('/warehouses', authenticate, asyncHandler(listWarehouses));
 router.post('/warehouses', authenticate, asyncHandler(createWarehouse));
-
-router.get('/businesses', authenticate, asyncHandler(listBusinesses));
-router.post('/businesses', authenticate, authorizeRoles('admin'), asyncHandler(createBusiness));
-router.patch('/businesses/:id', authenticate, authorizeRoles('admin'), asyncHandler(updateBusiness));
-router.delete('/businesses/:id', authenticate, authorizeRoles('admin'), asyncHandler(deactivateBusiness));
-
-router.get('/factories', authenticate, asyncHandler(listFactories));
-router.post('/factories', authenticate, authorizeRoles('admin'), asyncHandler(createFactory));
-router.patch('/factories/:id', authenticate, authorizeRoles('admin'), asyncHandler(updateFactory));
-router.delete('/factories/:id', authenticate, authorizeRoles('admin'), asyncHandler(deactivateFactory));
-
-router.get('/facilities', authenticate, asyncHandler(listFacilities));
-router.post('/facilities', authenticate, authorizeRoles('admin'), asyncHandler(createFacility));
-router.patch('/facilities/:id', authenticate, authorizeRoles('admin'), asyncHandler(updateFacility));
-router.delete('/facilities/:id', authenticate, authorizeRoles('admin'), asyncHandler(deactivateFacility));
-
-// Backward-compatible plant endpoints.
-router.get('/plants', authenticate, asyncHandler(listPlants));
-router.post('/plants', authenticate, authorizeRoles('admin'), asyncHandler(createPlant));
-router.patch('/plants/:id', authenticate, authorizeRoles('admin'), asyncHandler(updatePlant));
-router.delete('/plants/:id', authenticate, authorizeRoles('admin'), asyncHandler(deactivatePlant));
 
 router.post('/stock/transactions', authenticate, asyncHandler(createStockTransaction));
 router.post('/stock/transfers', authenticate, asyncHandler(createTransfer));

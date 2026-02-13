@@ -5,11 +5,10 @@ import { ApiError } from '../utils/apiError';
 import { nowIso } from '../utils/time';
 import { projectOnHand, validateTransferWarehouses } from './inventoryDomain';
 import type {
-  BusinessRow,
-  FactoryRow,
   InventoryDirection,
   InventoryTransactionType,
-  PlantRow,
+  OrganizationRow,
+  OrganizationUnitRow,
   ProductRow,
   StockTransactionRow,
   WarehouseRow
@@ -30,66 +29,36 @@ interface CreateWarehouseInput {
   code: string;
 }
 
-interface CreateBusinessInput {
+interface CreateOrganizationInput {
   code: string;
   name: string;
   city?: string | null;
   isActive?: boolean;
 }
 
-interface UpdateBusinessInput {
+interface UpdateOrganizationInput {
   code?: string;
   name?: string;
   city?: string | null;
   isActive?: boolean;
 }
 
-interface CreateFactoryInput {
-  businessId: number;
+interface CreateOrganizationUnitInput {
+  organizationId: number;
+  parentUnitId?: number | null;
   code: string;
   name: string;
+  kind?: string | null;
   city?: string | null;
   isActive?: boolean;
 }
 
-interface UpdateFactoryInput {
-  businessId?: number;
+interface UpdateOrganizationUnitInput {
+  organizationId?: number;
+  parentUnitId?: number | null;
   code?: string;
   name?: string;
-  city?: string | null;
-  isActive?: boolean;
-}
-
-interface CreateFacilityInput {
-  factoryId: number;
-  code: string;
-  name: string;
-  city?: string | null;
-  isActive?: boolean;
-}
-
-interface UpdateFacilityInput {
-  factoryId?: number;
-  code?: string;
-  name?: string;
-  city?: string | null;
-  isActive?: boolean;
-}
-
-interface CreatePlantInput {
-  businessId?: number;
-  factoryId?: number;
-  code: string;
-  name: string;
-  city?: string | null;
-  isActive?: boolean;
-}
-
-interface UpdatePlantInput {
-  businessId?: number;
-  factoryId?: number;
-  code?: string;
-  name?: string;
+  kind?: string | null;
   city?: string | null;
   isActive?: boolean;
 }
@@ -156,7 +125,7 @@ const mapWarehouse = (row: WarehouseRow) => ({
   updatedAt: row.updated_at
 });
 
-const mapBusiness = (row: BusinessRow) => ({
+const mapOrganization = (row: OrganizationRow) => ({
   id: row.id,
   code: row.code,
   name: row.name,
@@ -166,41 +135,24 @@ const mapBusiness = (row: BusinessRow) => ({
   updatedAt: row.updated_at
 });
 
-const mapFactory = (
-  row: FactoryRow & {
-    business_name?: string | null;
-    business_code?: string | null;
+const mapOrganizationUnit = (
+  row: OrganizationUnitRow & {
+    organization_name?: string | null;
+    organization_code?: string | null;
+    parent_name?: string | null;
+    parent_code?: string | null;
   }
 ) => ({
   id: row.id,
-  businessId: row.business_id,
-  businessCode: row.business_code ?? null,
-  businessName: row.business_name ?? null,
+  organizationId: row.organization_id,
+  organizationCode: row.organization_code ?? null,
+  organizationName: row.organization_name ?? null,
+  parentUnitId: row.parent_unit_id,
+  parentCode: row.parent_code ?? null,
+  parentName: row.parent_name ?? null,
   code: row.code,
   name: row.name,
-  city: row.city,
-  isActive: row.is_active,
-  createdAt: row.created_at,
-  updatedAt: row.updated_at
-});
-
-const mapFacility = (
-  row: PlantRow & {
-    business_name?: string | null;
-    business_code?: string | null;
-    factory_name?: string | null;
-    factory_code?: string | null;
-  }
-) => ({
-  id: row.id,
-  businessId: row.business_id,
-  businessCode: row.business_code ?? null,
-  businessName: row.business_name ?? null,
-  factoryId: row.factory_id,
-  factoryCode: row.factory_code ?? null,
-  factoryName: row.factory_name ?? null,
-  code: row.code,
-  name: row.name,
+  kind: row.kind,
   city: row.city,
   isActive: row.is_active,
   createdAt: row.created_at,
@@ -241,37 +193,26 @@ const getWarehouseOrThrow = async (
   return warehouse;
 };
 
-const getBusinessOrThrow = async (
+const getOrganizationOrThrow = async (
   trx: Knex | Knex.Transaction,
-  businessId: number
-): Promise<BusinessRow> => {
-  const business = await trx<BusinessRow>('businesses').where({ id: businessId }).first();
-  if (!business) {
-    throw new ApiError(404, 'Business not found');
+  organizationId: number
+): Promise<OrganizationRow> => {
+  const organization = await trx<OrganizationRow>('organizations').where({ id: organizationId }).first();
+  if (!organization) {
+    throw new ApiError(404, 'Organization not found');
   }
-  return business;
+  return organization;
 };
 
-const getFactoryOrThrow = async (
+const getOrganizationUnitOrThrow = async (
   trx: Knex | Knex.Transaction,
-  factoryId: number
-): Promise<FactoryRow> => {
-  const factory = await trx<FactoryRow>('factories').where({ id: factoryId }).first();
-  if (!factory) {
-    throw new ApiError(404, 'Factory not found');
+  unitId: number
+): Promise<OrganizationUnitRow> => {
+  const unit = await trx<OrganizationUnitRow>('organization_units').where({ id: unitId }).first();
+  if (!unit) {
+    throw new ApiError(404, 'Organization unit not found');
   }
-  return factory;
-};
-
-const getFirstFactoryByBusinessOrThrow = async (
-  trx: Knex | Knex.Transaction,
-  businessId: number
-): Promise<FactoryRow> => {
-  const factory = await trx<FactoryRow>('factories').where({ business_id: businessId, is_active: true }).orderBy('id', 'asc').first();
-  if (!factory) {
-    throw new ApiError(400, 'No active factory found for the given business');
-  }
-  return factory;
+  return unit;
 };
 
 const rawOnHand = (trx: Knex | Knex.Transaction, productId: number, warehouseId: number) =>
@@ -347,15 +288,15 @@ export const inventoryService = {
     }
   },
 
-  async listBusinesses() {
-    const rows = await db<BusinessRow>('businesses').orderBy('name', 'asc');
-    return rows.map(mapBusiness);
+  async listOrganizations() {
+    const rows = await db<OrganizationRow>('organizations').orderBy('name', 'asc');
+    return rows.map(mapOrganization);
   },
 
-  async createBusiness(input: CreateBusinessInput) {
+  async createOrganization(input: CreateOrganizationInput) {
     const timestamp = nowIso();
     try {
-      const [row] = await db<BusinessRow>('businesses')
+      const [row] = await db<OrganizationRow>('organizations')
         .insert({
           code: input.code.trim(),
           name: input.name.trim(),
@@ -365,16 +306,16 @@ export const inventoryService = {
           updated_at: timestamp
         })
         .returning('*');
-      return mapBusiness(row);
+      return mapOrganization(row);
     } catch (error) {
       if ((error as { code?: string }).code === '23505') {
-        throw new ApiError(409, 'Business code already exists');
+        throw new ApiError(409, 'Organization code already exists');
       }
       throw error;
     }
   },
 
-  async updateBusiness(businessId: number, input: UpdateBusinessInput) {
+  async updateOrganization(organizationId: number, input: UpdateOrganizationInput) {
     const payload: Record<string, unknown> = { updated_at: nowIso() };
     if (input.code !== undefined) payload.code = input.code.trim();
     if (input.name !== undefined) payload.name = input.name.trim();
@@ -382,99 +323,154 @@ export const inventoryService = {
     if (input.isActive !== undefined) payload.is_active = input.isActive;
 
     try {
-      const [row] = await db<BusinessRow>('businesses').where({ id: businessId }).update(payload).returning('*');
-      if (!row) throw new ApiError(404, 'Business not found');
-      return mapBusiness(row);
+      const [row] = await db<OrganizationRow>('organizations')
+        .where({ id: organizationId })
+        .update(payload)
+        .returning('*');
+      if (!row) throw new ApiError(404, 'Organization not found');
+      return mapOrganization(row);
     } catch (error) {
       if ((error as { code?: string }).code === '23505') {
-        throw new ApiError(409, 'Business code already exists');
+        throw new ApiError(409, 'Organization code already exists');
       }
       throw error;
     }
   },
 
-  async deactivateBusiness(businessId: number) {
-    const [row] = await db<BusinessRow>('businesses')
-      .where({ id: businessId })
+  async deactivateOrganization(organizationId: number) {
+    const [row] = await db<OrganizationRow>('organizations')
+      .where({ id: organizationId })
       .update({ is_active: false, updated_at: nowIso() })
       .returning('*');
-    if (!row) throw new ApiError(404, 'Business not found');
-    return mapBusiness(row);
+    if (!row) throw new ApiError(404, 'Organization not found');
+    return mapOrganization(row);
   },
 
-  async listFactories() {
-    const rows = await db<FactoryRow>('factories')
-      .leftJoin('businesses', 'factories.business_id', 'businesses.id')
+  async listOrganizationUnits() {
+    const rows = await db<OrganizationUnitRow>('organization_units')
+      .leftJoin('organizations', 'organization_units.organization_id', 'organizations.id')
+      .leftJoin('organization_units as parent', 'organization_units.parent_unit_id', 'parent.id')
       .select(
-        'factories.id',
-        'factories.business_id',
-        'factories.code',
-        'factories.name',
-        'factories.city',
-        'factories.is_active',
-        'factories.created_at',
-        'factories.updated_at',
-        'businesses.name as business_name',
-        'businesses.code as business_code'
+        'organization_units.id',
+        'organization_units.organization_id',
+        'organization_units.parent_unit_id',
+        'organization_units.code',
+        'organization_units.name',
+        'organization_units.kind',
+        'organization_units.city',
+        'organization_units.is_active',
+        'organization_units.created_at',
+        'organization_units.updated_at',
+        'organizations.name as organization_name',
+        'organizations.code as organization_code',
+        'parent.name as parent_name',
+        'parent.code as parent_code'
       )
-      .orderBy('factories.name', 'asc');
-    return rows.map((row) => mapFactory(row as FactoryRow & { business_name?: string | null; business_code?: string | null }));
+      .orderBy('organization_units.name', 'asc');
+
+    return rows.map((row) =>
+      mapOrganizationUnit(
+        row as OrganizationUnitRow & {
+          organization_name?: string | null;
+          organization_code?: string | null;
+          parent_name?: string | null;
+          parent_code?: string | null;
+        }
+      )
+    );
   },
 
-  async createFactory(input: CreateFactoryInput) {
+  async createOrganizationUnit(input: CreateOrganizationUnitInput) {
     const timestamp = nowIso();
     try {
-      await getBusinessOrThrow(db, input.businessId);
-      const [row] = await db<FactoryRow>('factories')
+      const organization = await getOrganizationOrThrow(db, input.organizationId);
+      let parentUnitId: number | null = null;
+
+      if (input.parentUnitId) {
+        const parent = await getOrganizationUnitOrThrow(db, input.parentUnitId);
+        if (parent.organization_id !== organization.id) {
+          throw new ApiError(400, 'parentUnitId must belong to the same organization');
+        }
+        parentUnitId = parent.id;
+      }
+
+      const [row] = await db<OrganizationUnitRow>('organization_units')
         .insert({
-          business_id: input.businessId,
+          organization_id: organization.id,
+          parent_unit_id: parentUnitId,
           code: input.code.trim(),
           name: input.name.trim(),
+          kind: input.kind?.trim() || null,
           city: input.city?.trim() || null,
           is_active: input.isActive ?? true,
           created_at: timestamp,
           updated_at: timestamp
         })
         .returning('*');
-      return mapFactory(row);
+      return mapOrganizationUnit(row);
     } catch (error) {
       if ((error as { code?: string }).code === '23505') {
-        throw new ApiError(409, 'Factory code already exists');
+        throw new ApiError(409, 'Organization unit code already exists');
       }
       throw error;
     }
   },
 
-  async updateFactory(factoryId: number, input: UpdateFactoryInput) {
+  async updateOrganizationUnit(unitId: number, input: UpdateOrganizationUnitInput) {
+    const current = await getOrganizationUnitOrThrow(db, unitId);
+
     const payload: Record<string, unknown> = { updated_at: nowIso() };
-    if (input.businessId !== undefined) {
-      await getBusinessOrThrow(db, input.businessId);
-      payload.business_id = input.businessId;
+
+    let targetOrganizationId = current.organization_id;
+    if (input.organizationId !== undefined) {
+      const organization = await getOrganizationOrThrow(db, input.organizationId);
+      payload.organization_id = organization.id;
+      targetOrganizationId = organization.id;
     }
+
+    if (input.parentUnitId !== undefined) {
+      if (input.parentUnitId === null) {
+        payload.parent_unit_id = null;
+      } else {
+        if (input.parentUnitId === unitId) {
+          throw new ApiError(400, 'parentUnitId cannot be the same as unit id');
+        }
+        const parent = await getOrganizationUnitOrThrow(db, input.parentUnitId);
+        if (parent.organization_id !== targetOrganizationId) {
+          throw new ApiError(400, 'parentUnitId must belong to the same organization');
+        }
+        payload.parent_unit_id = parent.id;
+      }
+    }
+
     if (input.code !== undefined) payload.code = input.code.trim();
     if (input.name !== undefined) payload.name = input.name.trim();
+    if (input.kind !== undefined) payload.kind = input.kind?.trim() || null;
     if (input.city !== undefined) payload.city = input.city?.trim() || null;
     if (input.isActive !== undefined) payload.is_active = input.isActive;
 
     try {
-      const [row] = await db<FactoryRow>('factories').where({ id: factoryId }).update(payload).returning('*');
-      if (!row) throw new ApiError(404, 'Factory not found');
-      return mapFactory(row);
+      const [row] = await db<OrganizationUnitRow>('organization_units')
+        .where({ id: unitId })
+        .update(payload)
+        .returning('*');
+      if (!row) throw new ApiError(404, 'Organization unit not found');
+      return mapOrganizationUnit(row);
     } catch (error) {
       if ((error as { code?: string }).code === '23505') {
-        throw new ApiError(409, 'Factory code already exists');
+        throw new ApiError(409, 'Organization unit code already exists');
       }
       throw error;
     }
   },
 
-  async deactivateFactory(factoryId: number) {
-    const [row] = await db<FactoryRow>('factories')
-      .where({ id: factoryId })
+  async deactivateOrganizationUnit(unitId: number) {
+    const [row] = await db<OrganizationUnitRow>('organization_units')
+      .where({ id: unitId })
       .update({ is_active: false, updated_at: nowIso() })
       .returning('*');
-    if (!row) throw new ApiError(404, 'Factory not found');
-    return mapFactory(row);
+    if (!row) throw new ApiError(404, 'Organization unit not found');
+    return mapOrganizationUnit(row);
   },
 
   async listWarehouses() {
@@ -500,140 +496,6 @@ export const inventoryService = {
       }
       throw error;
     }
-  },
-
-  async listFacilities() {
-    const rows = await db<PlantRow>('plants')
-      .leftJoin('businesses', 'plants.business_id', 'businesses.id')
-      .leftJoin('factories', 'plants.factory_id', 'factories.id')
-      .select(
-        'plants.id',
-        'plants.business_id',
-        'plants.factory_id',
-        'plants.code',
-        'plants.name',
-        'plants.city',
-        'plants.is_active',
-        'plants.created_at',
-        'plants.updated_at',
-        'businesses.name as business_name',
-        'businesses.code as business_code',
-        'factories.name as factory_name',
-        'factories.code as factory_code'
-      )
-      .orderBy('plants.name', 'asc');
-    return rows.map((row) =>
-      mapFacility(
-        row as PlantRow & {
-          business_name?: string | null;
-          business_code?: string | null;
-          factory_name?: string | null;
-          factory_code?: string | null;
-        }
-      )
-    );
-  },
-
-  async createFacility(input: CreateFacilityInput) {
-    const timestamp = nowIso();
-    try {
-      const factory = await getFactoryOrThrow(db, input.factoryId);
-      const [row] = await db<PlantRow>('plants')
-        .insert({
-          business_id: factory.business_id,
-          factory_id: factory.id,
-          code: input.code.trim(),
-          name: input.name.trim(),
-          city: input.city?.trim() || null,
-          is_active: input.isActive ?? true,
-          created_at: timestamp,
-          updated_at: timestamp
-        })
-        .returning('*');
-      return mapFacility(row as PlantRow);
-    } catch (error) {
-      if ((error as { code?: string }).code === '23505') {
-        throw new ApiError(409, 'Facility code already exists');
-      }
-      throw error;
-    }
-  },
-
-  async updateFacility(facilityId: number, input: UpdateFacilityInput) {
-    const payload: Record<string, unknown> = { updated_at: nowIso() };
-    if (input.factoryId !== undefined) {
-      const factory = await getFactoryOrThrow(db, input.factoryId);
-      payload.factory_id = factory.id;
-      payload.business_id = factory.business_id;
-    }
-    if (input.code !== undefined) payload.code = input.code.trim();
-    if (input.name !== undefined) payload.name = input.name.trim();
-    if (input.city !== undefined) payload.city = input.city?.trim() || null;
-    if (input.isActive !== undefined) payload.is_active = input.isActive;
-
-    try {
-      const [row] = await db<PlantRow>('plants').where({ id: facilityId }).update(payload).returning('*');
-      if (!row) throw new ApiError(404, 'Facility not found');
-      return mapFacility(row as PlantRow);
-    } catch (error) {
-      if ((error as { code?: string }).code === '23505') {
-        throw new ApiError(409, 'Facility code already exists');
-      }
-      throw error;
-    }
-  },
-
-  async deactivateFacility(facilityId: number) {
-    const [row] = await db<PlantRow>('plants')
-      .where({ id: facilityId })
-      .update({ is_active: false, updated_at: nowIso() })
-      .returning('*');
-    if (!row) throw new ApiError(404, 'Facility not found');
-    return mapFacility(row as PlantRow);
-  },
-
-  // Backward compatibility aliases for previous "plant" naming.
-  async listPlants() {
-    return this.listFacilities();
-  },
-
-  async createPlant(input: CreatePlantInput) {
-    let factoryId = input.factoryId;
-    if (!factoryId) {
-      if (!input.businessId) {
-        throw new ApiError(400, 'factoryId is required');
-      }
-      const factory = await getFirstFactoryByBusinessOrThrow(db, input.businessId);
-      factoryId = factory.id;
-    }
-
-    return this.createFacility({
-      factoryId,
-      code: input.code,
-      name: input.name,
-      city: input.city,
-      isActive: input.isActive
-    });
-  },
-
-  async updatePlant(plantId: number, input: UpdatePlantInput) {
-    let factoryId = input.factoryId;
-    if (!factoryId && input.businessId) {
-      const factory = await getFirstFactoryByBusinessOrThrow(db, input.businessId);
-      factoryId = factory.id;
-    }
-
-    return this.updateFacility(plantId, {
-      factoryId,
-      code: input.code,
-      name: input.name,
-      city: input.city,
-      isActive: input.isActive
-    });
-  },
-
-  async deactivatePlant(plantId: number) {
-    return this.deactivateFacility(plantId);
   },
 
   async createStockTransaction(input: CreateStockTransactionInput) {

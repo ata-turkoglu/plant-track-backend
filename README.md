@@ -58,6 +58,14 @@ Base URL: `http://localhost:4000/api/v1`
 - `DELETE /users/:id` (admin, soft delete)
 - `GET /products`
 - `POST /products`
+- `GET /organizations`
+- `POST /organizations` (admin)
+- `PATCH /organizations/:id` (admin)
+- `DELETE /organizations/:id` (admin, soft delete)
+- `GET /organization-units`
+- `POST /organization-units` (admin)
+- `PATCH /organization-units/:id` (admin)
+- `DELETE /organization-units/:id` (admin, soft delete)
 - `GET /warehouses`
 - `POST /warehouses`
 - `POST /stock/transactions`
@@ -80,6 +88,8 @@ Base URL: `http://localhost:4000/api/v1`
 ## Inventory tablolari
 
 - `products`
+- `organizations`
+- `organization_units` (parent-child hiyerarsi)
 - `warehouses`
 - `warehouse_locations` (opsiyonel lokasyon master)
 - `stock_transactions`

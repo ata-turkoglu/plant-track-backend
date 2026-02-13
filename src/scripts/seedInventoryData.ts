@@ -22,17 +22,19 @@ interface WarehouseSeed {
   locations: string[];
 }
 
-interface BusinessSeed {
+interface OrganizationSeed {
   code: string;
   name: string;
   city: string;
 }
 
-interface PlantSeed {
+interface OrganizationUnitSeed {
   code: string;
   name: string;
   city: string;
-  businessCode: string;
+  kind: string;
+  organizationCode: string;
+  parentCode?: string;
 }
 
 interface ProductRow {
@@ -45,7 +47,12 @@ interface WarehouseRow {
   code: string;
 }
 
-interface BusinessRow {
+interface OrganizationRow {
+  id: string;
+  code: string;
+}
+
+interface OrganizationUnitRow {
   id: string;
   code: string;
 }
@@ -100,14 +107,50 @@ const warehouses: WarehouseSeed[] = [
   { code: 'URUN-DEP', name: 'Urun Deposu', locations: ['U-01', 'U-02', 'U-03', 'U-04'] }
 ];
 
-const businesses: BusinessSeed[] = [
-  { code: 'ISL-KVZ', name: 'Anadolu Kuvars Isletmesi', city: 'Aydin' },
-  { code: 'ISL-LOJ', name: 'Kuvars Lojistik ve Sevkiyat', city: 'Izmir' }
+const organizations: OrganizationSeed[] = [
+  { code: 'ORG-KVZ', name: 'Anadolu Kuvars Organizasyonu', city: 'Aydin' },
+  { code: 'ORG-LOJ', name: 'Kuvars Lojistik Organizasyonu', city: 'Izmir' }
 ];
 
-const plants: PlantSeed[] = [
-  { code: 'PLT-KVZ-01', name: 'Kuvars Kirma-Eleme Tesisi', city: 'Aydin', businessCode: 'ISL-KVZ' },
-  { code: 'PLT-KVZ-02', name: 'Yikama ve Siniflandirma Hatti', city: 'Aydin', businessCode: 'ISL-KVZ' }
+const organizationUnits: OrganizationUnitSeed[] = [
+  {
+    code: 'UNIT-KVZ-BIZ',
+    name: 'Kuvars Isletme Birimi',
+    city: 'Aydin',
+    kind: 'BUSINESS',
+    organizationCode: 'ORG-KVZ'
+  },
+  {
+    code: 'UNIT-KVZ-FCT',
+    name: 'Merkez Fabrika Birimi',
+    city: 'Aydin',
+    kind: 'FACTORY',
+    organizationCode: 'ORG-KVZ',
+    parentCode: 'UNIT-KVZ-BIZ'
+  },
+  {
+    code: 'UNIT-KVZ-FCL-01',
+    name: 'Kirma-Eleme Tesisi',
+    city: 'Aydin',
+    kind: 'FACILITY',
+    organizationCode: 'ORG-KVZ',
+    parentCode: 'UNIT-KVZ-FCT'
+  },
+  {
+    code: 'UNIT-KVZ-FCL-02',
+    name: 'Yikama ve Siniflandirma Hatti',
+    city: 'Aydin',
+    kind: 'FACILITY',
+    organizationCode: 'ORG-KVZ',
+    parentCode: 'UNIT-KVZ-FCT'
+  },
+  {
+    code: 'UNIT-LOJ-BIZ',
+    name: 'Lojistik Isletme Birimi',
+    city: 'Izmir',
+    kind: 'BUSINESS',
+    organizationCode: 'ORG-LOJ'
+  }
 ];
 
 const qty = (base: number, variance: number, offset: number): number => {
@@ -255,7 +298,7 @@ const main = async (): Promise<void> => {
   }
 
   await db.raw(
-    'TRUNCATE TABLE stock_transactions, warehouse_locations, products, warehouses, plants, businesses RESTART IDENTITY CASCADE'
+    'TRUNCATE TABLE stock_transactions, warehouse_locations, products, warehouses, organization_units, organizations RESTART IDENTITY CASCADE'
   );
 
   const now = new Date().toISOString();
@@ -278,8 +321,8 @@ const main = async (): Promise<void> => {
     }))
   );
 
-  await db('businesses').insert(
-    businesses.map((item) => ({
+  await db('organizations').insert(
+    organizations.map((item) => ({
       code: item.code,
       name: item.name,
       city: item.city,
@@ -289,32 +332,57 @@ const main = async (): Promise<void> => {
     }))
   );
 
-  const businessRows = await db<BusinessRow>('businesses').select('id', 'code').whereIn(
+  const organizationRows = await db<OrganizationRow>('organizations').select('id', 'code').whereIn(
     'code',
-    businesses.map((item) => item.code)
+    organizations.map((item) => item.code)
   );
-  const businessByCode = new Map(businessRows.map((row) => [row.code, row]));
+  const organizationByCode = new Map(organizationRows.map((row) => [row.code, row]));
+  const unitByCode = new Map<string, OrganizationUnitRow>();
+  const pendingUnits = [...organizationUnits];
 
-  await db('plants').insert(
-    plants
-      .map((item) => {
-        const business = businessByCode.get(item.businessCode);
-        if (!business) {
-          return null;
+  while (pendingUnits.length > 0) {
+    let insertedInPass = 0;
+
+    for (let i = pendingUnits.length - 1; i >= 0; i -= 1) {
+      const item = pendingUnits[i];
+      const organization = organizationByCode.get(item.organizationCode);
+      if (!organization) {
+        pendingUnits.splice(i, 1);
+        continue;
+      }
+
+      let parentUnitId: string | null = null;
+      if (item.parentCode) {
+        const parent = unitByCode.get(item.parentCode);
+        if (!parent) {
+          continue;
         }
+        parentUnitId = parent.id;
+      }
 
-        return {
-          business_id: business.id,
+      const [inserted] = await db<OrganizationUnitRow>('organization_units')
+        .insert({
+          organization_id: organization.id,
+          parent_unit_id: parentUnitId,
           code: item.code,
           name: item.name,
+          kind: item.kind,
           city: item.city,
           is_active: true,
           created_at: now,
           updated_at: now
-        };
-      })
-      .filter((row): row is NonNullable<typeof row> => Boolean(row))
-  );
+        })
+        .returning(['id', 'code']);
+
+      unitByCode.set(item.code, inserted);
+      pendingUnits.splice(i, 1);
+      insertedInPass += 1;
+    }
+
+    if (insertedInPass === 0) {
+      throw new Error('organization unit parent hiyerarsisi cozumlenemedi.');
+    }
+  }
 
   const productRows = await db<ProductRow>('products').select('id', 'sku').whereIn(
     'sku',
@@ -345,10 +413,10 @@ const main = async (): Promise<void> => {
   const transactionRows = buildTransactions(productRows, warehouseByCode, user.id);
   await db.batchInsert('stock_transactions', transactionRows, 120);
 
-  const [productCount, businessCount, plantCount, warehouseCount, locationCount, transactionCount] = await Promise.all([
+  const [productCount, organizationCount, unitCount, warehouseCount, locationCount, transactionCount] = await Promise.all([
     db('products').count<{ count: string }>('id as count').first(),
-    db('businesses').count<{ count: string }>('id as count').first(),
-    db('plants').count<{ count: string }>('id as count').first(),
+    db('organizations').count<{ count: string }>('id as count').first(),
+    db('organization_units').count<{ count: string }>('id as count').first(),
     db('warehouses').count<{ count: string }>('id as count').first(),
     db('warehouse_locations').count<{ count: string }>('id as count').first(),
     db('stock_transactions').count<{ count: string }>('id as count').first()
@@ -358,7 +426,7 @@ const main = async (): Promise<void> => {
   console.log('Quartz operasyonu inventory seed tamamlandi');
   // eslint-disable-next-line no-console
   console.log(
-    `businesses=${businessCount?.count ?? 0}, plants=${plantCount?.count ?? 0}, products=${productCount?.count ?? 0}, warehouses=${warehouseCount?.count ?? 0}, warehouse_locations=${locationCount?.count ?? 0}, stock_transactions=${transactionCount?.count ?? 0}`
+    `organizations=${organizationCount?.count ?? 0}, organization_units=${unitCount?.count ?? 0}, products=${productCount?.count ?? 0}, warehouses=${warehouseCount?.count ?? 0}, warehouse_locations=${locationCount?.count ?? 0}, stock_transactions=${transactionCount?.count ?? 0}`
   );
   // eslint-disable-next-line no-console
   console.log(`created_by user: ${user.email} (${user.id})`);
