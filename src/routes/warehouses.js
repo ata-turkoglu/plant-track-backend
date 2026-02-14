@@ -33,7 +33,8 @@ router.get('/organizations/:id/warehouses', (req, res) => {
 
 const createSchema = z.object({
   name: z.string().min(1).max(255),
-  location_id: z.number().int().positive()
+  location_id: z.number().int().positive(),
+  type: z.enum(['RAW_MATERIAL', 'SPARE_PART', 'FINISHED_GOOD']).default('RAW_MATERIAL')
 });
 
 router.post('/organizations/:id/warehouses', (req, res) => {
@@ -61,7 +62,8 @@ router.post('/organizations/:id/warehouses', (req, res) => {
         createWarehouse(trx, {
           organizationId,
           locationId: parsed.data.location_id,
-          name: parsed.data.name
+          name: parsed.data.name,
+          type: parsed.data.type
         })
       );
 
@@ -77,7 +79,8 @@ router.post('/organizations/:id/warehouses', (req, res) => {
 
 const patchSchema = z.object({
   name: z.string().min(1).max(255),
-  location_id: z.number().int().positive()
+  location_id: z.number().int().positive(),
+  type: z.enum(['RAW_MATERIAL', 'SPARE_PART', 'FINISHED_GOOD'])
 });
 
 router.patch('/warehouses/:id', (req, res) => {
@@ -106,7 +109,8 @@ router.patch('/warehouses/:id', (req, res) => {
           id,
           organizationId: existing.organization_id,
           locationId: parsed.data.location_id,
-          name: parsed.data.name
+          name: parsed.data.name,
+          type: parsed.data.type
         })
       );
 
