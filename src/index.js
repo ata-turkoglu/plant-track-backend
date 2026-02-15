@@ -7,6 +7,10 @@ import authRoutes from './routes/auth.js';
 import organizationsRoutes from './routes/organizations.js';
 import locationsRoutes from './routes/locations.js';
 import warehousesRoutes from './routes/warehouses.js';
+import warehouseTypesRoutes from './routes/warehouseTypes.js';
+import itemsRoutes from './routes/items.js';
+import inventoryMovementsRoutes from './routes/inventoryMovements.js';
+import unitsRoutes from './routes/units.js';
 
 const app = express();
 const port = Number(process.env.PORT ?? 3001);
@@ -20,6 +24,10 @@ app.use('/api', authRoutes);
 app.use('/api', organizationsRoutes);
 app.use('/api', locationsRoutes);
 app.use('/api', warehousesRoutes);
+app.use('/api', warehouseTypesRoutes);
+app.use('/api', itemsRoutes);
+app.use('/api', inventoryMovementsRoutes);
+app.use('/api', unitsRoutes);
 
 app.use((_req, res) => {
   res.status(404).json({ message: 'Not found' });

@@ -9,6 +9,7 @@ import {
   updateWarehouse,
   deleteWarehouse
 } from '../models/warehouses.js';
+import { getWarehouseTypeById } from '../models/warehouseTypes.js';
 
 const router = Router();
 
@@ -34,7 +35,7 @@ router.get('/organizations/:id/warehouses', (req, res) => {
 const createSchema = z.object({
   name: z.string().min(1).max(255),
   location_id: z.number().int().positive(),
-  type: z.enum(['RAW_MATERIAL', 'SPARE_PART', 'FINISHED_GOOD']).default('RAW_MATERIAL')
+  warehouse_type_id: z.number().int().positive()
 });
 
 router.post('/organizations/:id/warehouses', (req, res) => {
@@ -58,12 +59,15 @@ router.post('/organizations/:id/warehouses', (req, res) => {
         .first(['id']);
       if (!location) return { badLocation: true };
 
+      const wt = await getWarehouseTypeById(parsed.data.warehouse_type_id);
+      if (!wt || wt.organization_id !== organizationId) return { badType: true };
+
       const warehouse = await db.transaction(async (trx) =>
         createWarehouse(trx, {
           organizationId,
           locationId: parsed.data.location_id,
           name: parsed.data.name,
-          type: parsed.data.type
+          warehouseTypeId: parsed.data.warehouse_type_id
         })
       );
 
@@ -72,6 +76,7 @@ router.post('/organizations/:id/warehouses', (req, res) => {
     .then((result) => {
       if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.badLocation) return res.status(400).json({ message: 'Invalid location' });
+      if (result.badType) return res.status(400).json({ message: 'Invalid warehouse type' });
       return res.status(201).json({ warehouse: result.warehouse });
     })
     .catch(() => res.status(500).json({ message: 'Failed to create warehouse' }));
@@ -80,7 +85,7 @@ router.post('/organizations/:id/warehouses', (req, res) => {
 const patchSchema = z.object({
   name: z.string().min(1).max(255),
   location_id: z.number().int().positive(),
-  type: z.enum(['RAW_MATERIAL', 'SPARE_PART', 'FINISHED_GOOD'])
+  warehouse_type_id: z.number().int().positive()
 });
 
 router.patch('/warehouses/:id', (req, res) => {
@@ -104,13 +109,16 @@ router.patch('/warehouses/:id', (req, res) => {
         .first(['id']);
       if (!location) return { badLocation: true };
 
+      const wt = await getWarehouseTypeById(parsed.data.warehouse_type_id);
+      if (!wt || wt.organization_id !== existing.organization_id) return { badType: true };
+
       const updated = await db.transaction(async (trx) =>
         updateWarehouse(trx, {
           id,
           organizationId: existing.organization_id,
           locationId: parsed.data.location_id,
           name: parsed.data.name,
-          type: parsed.data.type
+          warehouseTypeId: parsed.data.warehouse_type_id
         })
       );
 
@@ -120,6 +128,9 @@ router.patch('/warehouses/:id', (req, res) => {
       if (!updated) return res.status(404).json({ message: 'Warehouse not found' });
       if (typeof updated === 'object' && updated !== null && 'badLocation' in updated) {
         return res.status(400).json({ message: 'Invalid location' });
+      }
+      if (typeof updated === 'object' && updated !== null && 'badType' in updated) {
+        return res.status(400).json({ message: 'Invalid warehouse type' });
       }
       return res.status(200).json({ warehouse: updated });
     })
