@@ -78,3 +78,49 @@ export async function createMovement(
 
   return rows[0];
 }
+
+export async function updateMovement(
+  trx,
+  { organizationId, movementId, warehouseId, locationId, itemId, movementType, quantity, uom, referenceType, referenceId, note, occurredAt }
+) {
+  const rows = await trx('inventory_movements')
+    .where({ id: movementId, organization_id: organizationId })
+    .update({
+      warehouse_id: warehouseId,
+      location_id: locationId ?? null,
+      item_id: itemId,
+      movement_type: movementType,
+      quantity,
+      uom,
+      reference_type: referenceType ?? null,
+      reference_id: referenceId ?? null,
+      note: note ?? null,
+      occurred_at: occurredAt ?? trx.fn.now(),
+      updated_at: trx.fn.now()
+    })
+    .returning([
+      'id',
+      'organization_id',
+      'warehouse_id',
+      'location_id',
+      'item_id',
+      'movement_type',
+      'quantity',
+      'uom',
+      'reference_type',
+      'reference_id',
+      'note',
+      'occurred_at'
+    ]);
+
+  return rows[0] ?? null;
+}
+
+export async function deleteMovement(trx, { organizationId, movementId }) {
+  const rows = await trx('inventory_movements')
+    .where({ id: movementId, organization_id: organizationId })
+    .del()
+    .returning(['id']);
+
+  return rows[0] ?? null;
+}
