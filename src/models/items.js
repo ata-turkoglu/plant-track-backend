@@ -4,16 +4,16 @@ export async function listItemsByOrganization(organizationId) {
   return db('items')
     .where({ organization_id: organizationId })
     .orderBy([{ column: 'active', order: 'desc' }, { column: 'name', order: 'asc' }])
-    .select(['id', 'organization_id', 'warehouse_type_id', 'type', 'code', 'name', 'uom', 'unit_id', 'active']);
+    .select(['id', 'organization_id', 'warehouse_type_id', 'type', 'code', 'name', 'unit_id', 'active']);
 }
 
 export async function getItemById(id) {
   return db('items')
     .where({ id })
-    .first(['id', 'organization_id', 'warehouse_type_id', 'type', 'code', 'name', 'uom', 'unit_id', 'active']);
+    .first(['id', 'organization_id', 'warehouse_type_id', 'type', 'code', 'name', 'unit_id', 'active']);
 }
 
-export async function createItem(trx, { organizationId, warehouseTypeId, type, code, name, uom, unitId, active }) {
+export async function createItem(trx, { organizationId, warehouseTypeId, type, code, name, unitId, active }) {
   const rows = await trx('items')
     .insert({
       organization_id: organizationId,
@@ -21,27 +21,25 @@ export async function createItem(trx, { organizationId, warehouseTypeId, type, c
       type,
       code,
       name,
-      uom,
       unit_id: unitId,
       active: active ?? true
     })
-    .returning(['id', 'organization_id', 'warehouse_type_id', 'type', 'code', 'name', 'uom', 'unit_id', 'active']);
+    .returning(['id', 'organization_id', 'warehouse_type_id', 'type', 'code', 'name', 'unit_id', 'active']);
 
   return rows[0];
 }
 
-export async function updateItem(trx, { organizationId, itemId, code, name, uom, unitId, active }) {
+export async function updateItem(trx, { organizationId, itemId, code, name, unitId, active }) {
   const rows = await trx('items')
     .where({ id: itemId, organization_id: organizationId })
     .update({
       code,
       name,
-      uom,
       unit_id: unitId,
       active,
       updated_at: trx.fn.now()
     })
-    .returning(['id', 'organization_id', 'warehouse_type_id', 'type', 'code', 'name', 'uom', 'unit_id', 'active']);
+    .returning(['id', 'organization_id', 'warehouse_type_id', 'type', 'code', 'name', 'unit_id', 'active']);
 
   return rows[0] ?? null;
 }

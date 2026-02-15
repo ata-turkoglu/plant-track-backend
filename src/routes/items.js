@@ -69,7 +69,6 @@ router.post('/organizations/:id/items', (req, res) => {
           type: wt.code,
           code: parsed.data.code,
           name: parsed.data.name,
-          uom: unit.code,
           unitId: unit.id,
           active: parsed.data.active
         })
@@ -132,7 +131,6 @@ router.put('/organizations/:id/items/:itemId', (req, res) => {
           itemId,
           code: parsed.data.code,
           name: parsed.data.name,
-          uom: unit.code,
           unitId: unit.id,
           active: parsed.data.active ?? true
         })

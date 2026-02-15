@@ -4,6 +4,7 @@ import { z } from 'zod';
 import db from '../db/knex.js';
 import { getWarehouseById } from '../models/warehouses.js';
 import { getItemById } from '../models/items.js';
+import { getUnitById } from '../models/units.js';
 import { listMovementsByOrganization, createMovement, updateMovement, deleteMovement } from '../models/inventoryMovements.js';
 
 const router = Router();
@@ -34,7 +35,8 @@ const createSchema = z.object({
   item_id: z.number().int().positive(),
   movement_type: z.enum(['IN', 'OUT', 'TRANSFER', 'ADJUSTMENT']),
   quantity: z.number().positive(),
-  uom: z.string().min(1).max(16),
+  // uom is derived from items.unit_id -> units.code (kept optional for backward compat).
+  uom: z.string().min(1).max(16).optional(),
   reference_type: z.string().max(64).optional().nullable(),
   reference_id: z.string().max(64).optional().nullable(),
   note: z.string().max(4000).optional().nullable(),
@@ -61,6 +63,9 @@ router.post('/organizations/:id/inventory-movements', (req, res) => {
       const item = await getItemById(parsed.data.item_id);
       if (!item || item.organization_id !== organizationId) return { badItem: true };
 
+      const unit = await getUnitById(item.unit_id);
+      if (!unit || unit.organization_id !== organizationId || !unit.active) return { badUnit: true };
+
       if (parsed.data.location_id) {
         const loc = await db('locations')
           .where({ id: parsed.data.location_id, organization_id: organizationId })
@@ -78,7 +83,7 @@ router.post('/organizations/:id/inventory-movements', (req, res) => {
           itemId: parsed.data.item_id,
           movementType: parsed.data.movement_type,
           quantity: parsed.data.quantity,
-          uom: parsed.data.uom,
+          uom: unit.code,
           referenceType: parsed.data.reference_type,
           referenceId: parsed.data.reference_id,
           note: parsed.data.note,
@@ -93,6 +98,7 @@ router.post('/organizations/:id/inventory-movements', (req, res) => {
       if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.badWarehouse) return res.status(400).json({ message: 'Invalid warehouse' });
       if (result.badItem) return res.status(400).json({ message: 'Invalid item' });
+      if (result.badUnit) return res.status(400).json({ message: 'Invalid unit' });
       if (result.badLocation) return res.status(400).json({ message: 'Invalid location' });
       return res.status(201).json({ movement: result.movement });
     })
@@ -137,6 +143,9 @@ router.put('/organizations/:id/inventory-movements/:movementId', (req, res) => {
       const item = await getItemById(parsed.data.item_id);
       if (!item || item.organization_id !== organizationId) return { badItem: true };
 
+      const unit = await getUnitById(item.unit_id);
+      if (!unit || unit.organization_id !== organizationId || !unit.active) return { badUnit: true };
+
       const occurredAt = parsed.data.occurred_at ? new Date(parsed.data.occurred_at) : undefined;
 
       const movement = await db.transaction(async (trx) =>
@@ -149,7 +158,7 @@ router.put('/organizations/:id/inventory-movements/:movementId', (req, res) => {
           movementType: parsed.data.movement_type,
           quantity: parsed.data.quantity,
           // Keep uom consistent with item unit code.
-          uom: item.uom,
+          uom: unit.code,
           referenceType: parsed.data.reference_type,
           referenceId: parsed.data.reference_id,
           note: parsed.data.note,
@@ -164,6 +173,7 @@ router.put('/organizations/:id/inventory-movements/:movementId', (req, res) => {
       if (result.notFoundMovement) return res.status(404).json({ message: 'Movement not found' });
       if (result.badWarehouse) return res.status(400).json({ message: 'Invalid warehouse' });
       if (result.badItem) return res.status(400).json({ message: 'Invalid item' });
+      if (result.badUnit) return res.status(400).json({ message: 'Invalid unit' });
       if (!result.movement) return res.status(404).json({ message: 'Movement not found' });
       return res.status(200).json({ movement: result.movement });
     })
