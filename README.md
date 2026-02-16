@@ -4,12 +4,11 @@
 
 ## Why it exists
 
-- Decouples `inventory_movements` from warehouse-only flows.
+- Decouples inventory movements from warehouse-only flows.
 - Lets a movement point from any stock node to any stock node.
 - Works with the new ledger source of truth:
   - `inventory_movement_events` (header)
   - `inventory_movement_lines` (lines)
-- Keeps legacy `inventory_movements` for backward compatibility during migration.
 
 ## Current node types
 
@@ -31,6 +30,9 @@
 ## Adding a new node type
 
 1. Extend `nodes_node_type_check` in migration flow.
-2. Add mapping logic in `backend/src/routes/inventoryMovements.js` for legacy-kind conversion.
-3. Expose/filter type from `GET /api/organizations/:id/nodes`.
-4. Update frontend selector grouping in `frontend/src/pages/InventoryMovementsPage.tsx`.
+2. Expose/filter type from `GET /api/organizations/:id/nodes`.
+3. Update frontend selector grouping in `frontend/src/pages/InventoryMovementsPage.tsx`.
+
+## Schema doc
+
+Current schema reference: `docs/db/SCHEMA.md`.

@@ -1,4 +1,6 @@
 /** @type {import('knex').Knex.Config} */
+const path = require('node:path');
+
 module.exports = {
   client: 'pg',
   connection: {
@@ -9,6 +11,6 @@ module.exports = {
     database: process.env.DB_NAME ?? 'plant_track'
   },
   migrations: {
-    directory: './migrations'
+    directory: path.resolve(__dirname, process.env.KNEX_MIGRATIONS_DIR ?? 'migrations')
   }
 };

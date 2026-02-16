@@ -26,6 +26,12 @@ router.get('/organizations/:id/customers', (req, res) => {
 
 const createSchema = z.object({
   name: z.string().min(1).max(255),
+  email: z.string().email().max(255).optional().nullable(),
+  phone: z.string().max(64).optional().nullable(),
+  address: z.string().max(4000).optional().nullable(),
+  tax_no: z.string().max(64).optional().nullable(),
+  contact_name: z.string().max(255).optional().nullable(),
+  notes: z.string().max(8000).optional().nullable(),
   active: z.boolean().optional()
 });
 
@@ -49,10 +55,31 @@ router.post('/organizations/:id/customers', (req, res) => {
         .first(['id']);
       if (conflict) return { conflict: true };
 
+      if (parsed.data.email) {
+        const emailConflict = await db('customers')
+          .where({ organization_id: organizationId })
+          .whereRaw('lower(email) = lower(?)', [parsed.data.email])
+          .first(['id']);
+        if (emailConflict) return { conflictEmail: true };
+      }
+
+      if (parsed.data.phone) {
+        const phoneConflict = await db('customers')
+          .where({ organization_id: organizationId, phone: parsed.data.phone })
+          .first(['id']);
+        if (phoneConflict) return { conflictPhone: true };
+      }
+
       const customer = await db.transaction(async (trx) =>
         createCustomer(trx, {
           organizationId,
           name: parsed.data.name,
+          email: parsed.data.email ?? null,
+          phone: parsed.data.phone ?? null,
+          address: parsed.data.address ?? null,
+          taxNo: parsed.data.tax_no ?? null,
+          contactName: parsed.data.contact_name ?? null,
+          notes: parsed.data.notes ?? null,
           active: parsed.data.active
         }).then(async (created) => {
           await upsertRefNode(trx, {
@@ -62,7 +89,11 @@ router.post('/organizations/:id/customers', (req, res) => {
             refId: created.id,
             name: created.name,
             isStocked: false,
-            metaJson: { active: created.active }
+            metaJson: {
+              active: created.active,
+              email: created.email ?? null,
+              phone: created.phone ?? null
+            }
           });
           return created;
         })
@@ -73,6 +104,8 @@ router.post('/organizations/:id/customers', (req, res) => {
     .then((result) => {
       if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.conflict) return res.status(409).json({ message: 'Customer already exists' });
+      if (result.conflictEmail) return res.status(409).json({ message: 'Customer email already exists' });
+      if (result.conflictPhone) return res.status(409).json({ message: 'Customer phone already exists' });
       return res.status(201).json({ customer: result.customer });
     })
     .catch(() => res.status(500).json({ message: 'Failed to create customer' }));
@@ -80,6 +113,12 @@ router.post('/organizations/:id/customers', (req, res) => {
 
 const updateSchema = z.object({
   name: z.string().min(1).max(255),
+  email: z.string().email().max(255).optional().nullable(),
+  phone: z.string().max(64).optional().nullable(),
+  address: z.string().max(4000).optional().nullable(),
+  tax_no: z.string().max(64).optional().nullable(),
+  contact_name: z.string().max(255).optional().nullable(),
+  notes: z.string().max(8000).optional().nullable(),
   active: z.boolean().optional()
 });
 
@@ -109,11 +148,34 @@ router.put('/organizations/:id/customers/:customerId', (req, res) => {
         .first(['id']);
       if (conflict) return { conflict: true };
 
+      if (parsed.data.email) {
+        const emailConflict = await db('customers')
+          .where({ organization_id: organizationId })
+          .whereNot({ id: customerId })
+          .whereRaw('lower(email) = lower(?)', [parsed.data.email])
+          .first(['id']);
+        if (emailConflict) return { conflictEmail: true };
+      }
+
+      if (parsed.data.phone) {
+        const phoneConflict = await db('customers')
+          .where({ organization_id: organizationId, phone: parsed.data.phone })
+          .whereNot({ id: customerId })
+          .first(['id']);
+        if (phoneConflict) return { conflictPhone: true };
+      }
+
       const customer = await db.transaction(async (trx) =>
         updateCustomer(trx, {
           organizationId,
           customerId,
           name: parsed.data.name,
+          email: parsed.data.email ?? null,
+          phone: parsed.data.phone ?? null,
+          address: parsed.data.address ?? null,
+          taxNo: parsed.data.tax_no ?? null,
+          contactName: parsed.data.contact_name ?? null,
+          notes: parsed.data.notes ?? null,
           active: parsed.data.active ?? true
         }).then(async (updated) => {
           if (!updated) return null;
@@ -124,7 +186,11 @@ router.put('/organizations/:id/customers/:customerId', (req, res) => {
             refId: updated.id,
             name: updated.name,
             isStocked: false,
-            metaJson: { active: updated.active }
+            metaJson: {
+              active: updated.active,
+              email: updated.email ?? null,
+              phone: updated.phone ?? null
+            }
           });
           return updated;
         })
@@ -136,6 +202,8 @@ router.put('/organizations/:id/customers/:customerId', (req, res) => {
       if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.notFoundCustomer) return res.status(404).json({ message: 'Customer not found' });
       if (result.conflict) return res.status(409).json({ message: 'Customer already exists' });
+      if (result.conflictEmail) return res.status(409).json({ message: 'Customer email already exists' });
+      if (result.conflictPhone) return res.status(409).json({ message: 'Customer phone already exists' });
       if (!result.customer) return res.status(404).json({ message: 'Customer not found' });
       return res.status(200).json({ customer: result.customer });
     })

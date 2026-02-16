@@ -9,6 +9,7 @@
     "db:create": "node scripts/create-db.cjs",
     "db:setup": "npm run db:create && npm run migrate",
     "migrate": "knex --knexfile knexfile.cjs migrate:latest",
+    "migrate:legacy": "KNEX_MIGRATIONS_DIR=./migrations_legacy knex --knexfile knexfile.cjs migrate:latest",
     "migrate:rollback": "knex --knexfile knexfile.cjs migrate:rollback"
   },
   "dependencies": {
