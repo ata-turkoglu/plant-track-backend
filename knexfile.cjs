@@ -11,6 +11,9 @@ module.exports = {
     database: process.env.DB_NAME ?? 'plant_track'
   },
   migrations: {
-    directory: path.resolve(__dirname, process.env.KNEX_MIGRATIONS_DIR ?? 'migrations')
+    directory: path.resolve(__dirname, process.env.KNEX_MIGRATIONS_DIR ?? 'migrations'),
+    // Legacy migration dosyalari `migrations_legacy` klasorune tasindigi icin
+    // mevcut DB'lerdeki eski kayitlar validation hatasi uretmesin.
+    disableMigrationsListValidation: true
   }
 };

@@ -1,5 +1,12 @@
 /** @param {import('knex').Knex} knex */
 exports.up = async function up(knex) {
+  // Legacy migration setiyle kurulmus veritabanlarinda bu tablo zaten var.
+  // Bu durumda init migration'i no-op yapip sadece yeni migration'lari uygulariz.
+  const hasOrganizations = await knex.schema.hasTable('organizations');
+  if (hasOrganizations) {
+    return;
+  }
+
   // Core
   await knex.schema.createTable('organizations', (t) => {
     t.increments('id').primary();
