@@ -137,6 +137,10 @@ exports.up = async function up(knex) {
     t.string('type', 32).notNullable();
     t.string('code', 64).notNullable();
     t.string('name', 255).notNullable();
+    t.string('brand', 255).nullable();
+    t.string('model', 255).nullable();
+    t.string('size_spec', 255).nullable();
+    t.integer('size_unit_id').nullable().references('id').inTable('units');
     t.boolean('active').notNullable().defaultTo(true);
 
     t.integer('unit_id').notNullable().references('id').inTable('units');
@@ -148,6 +152,7 @@ exports.up = async function up(knex) {
     t.index(['organization_id']);
     t.index(['organization_id', 'type']);
     t.index(['unit_id']);
+    t.index(['size_unit_id']);
     t.index(['organization_id', 'warehouse_type_id']);
   });
 

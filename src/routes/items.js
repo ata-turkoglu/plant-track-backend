@@ -31,6 +31,10 @@ const createSchema = z.object({
   warehouse_type_id: z.number().int().positive(),
   code: z.string().min(1).max(64),
   name: z.string().min(1).max(255),
+  brand: z.string().max(255).optional().nullable(),
+  model: z.string().max(255).optional().nullable(),
+  size_spec: z.string().max(255).optional().nullable(),
+  size_unit_id: z.number().int().positive().optional().nullable(),
   unit_id: z.number().int().positive(),
   active: z.boolean().optional()
 });
@@ -59,6 +63,11 @@ router.post('/organizations/:id/items', (req, res) => {
       const unit = await getUnitById(parsed.data.unit_id);
       if (!unit || unit.organization_id !== organizationId || !unit.active) return { badUnit: true };
 
+      if (parsed.data.size_unit_id) {
+        const sizeUnit = await getUnitById(parsed.data.size_unit_id);
+        if (!sizeUnit || sizeUnit.organization_id !== organizationId || !sizeUnit.active) return { badSizeUnit: true };
+      }
+
       const wt = await getWarehouseTypeById(parsed.data.warehouse_type_id);
       if (!wt || wt.organization_id !== organizationId) return { badWarehouseType: true };
 
@@ -69,6 +78,10 @@ router.post('/organizations/:id/items', (req, res) => {
           type: wt.code,
           code: parsed.data.code,
           name: parsed.data.name,
+          brand: parsed.data.brand?.trim() || null,
+          model: parsed.data.model?.trim() || null,
+          sizeSpec: parsed.data.size_spec?.trim() || null,
+          sizeUnitId: parsed.data.size_unit_id ?? null,
           unitId: unit.id,
           active: parsed.data.active
         })
@@ -80,6 +93,7 @@ router.post('/organizations/:id/items', (req, res) => {
       if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.conflict) return res.status(409).json({ message: 'Item code already exists' });
       if (result.badUnit) return res.status(400).json({ message: 'Invalid unit' });
+      if (result.badSizeUnit) return res.status(400).json({ message: 'Invalid size unit' });
       if (result.badWarehouseType) return res.status(400).json({ message: 'Invalid warehouse type' });
       return res.status(201).json({ item: result.item });
     })
@@ -89,6 +103,10 @@ router.post('/organizations/:id/items', (req, res) => {
 const updateSchema = z.object({
   code: z.string().min(1).max(64),
   name: z.string().min(1).max(255),
+  brand: z.string().max(255).optional().nullable(),
+  model: z.string().max(255).optional().nullable(),
+  size_spec: z.string().max(255).optional().nullable(),
+  size_unit_id: z.number().int().positive().optional().nullable(),
   unit_id: z.number().int().positive(),
   active: z.boolean().optional()
 });
@@ -125,12 +143,21 @@ router.put('/organizations/:id/items/:itemId', (req, res) => {
       const unit = await getUnitById(parsed.data.unit_id);
       if (!unit || unit.organization_id !== organizationId || !unit.active) return { badUnit: true };
 
+      if (parsed.data.size_unit_id) {
+        const sizeUnit = await getUnitById(parsed.data.size_unit_id);
+        if (!sizeUnit || sizeUnit.organization_id !== organizationId || !sizeUnit.active) return { badSizeUnit: true };
+      }
+
       const item = await db.transaction(async (trx) =>
         updateItem(trx, {
           organizationId,
           itemId,
           code: parsed.data.code,
           name: parsed.data.name,
+          brand: parsed.data.brand?.trim() || null,
+          model: parsed.data.model?.trim() || null,
+          sizeSpec: parsed.data.size_spec?.trim() || null,
+          sizeUnitId: parsed.data.size_unit_id ?? null,
           unitId: unit.id,
           active: parsed.data.active ?? true
         })
@@ -143,6 +170,7 @@ router.put('/organizations/:id/items/:itemId', (req, res) => {
       if (result.notFoundItem) return res.status(404).json({ message: 'Item not found' });
       if (result.conflict) return res.status(409).json({ message: 'Item code already exists' });
       if (result.badUnit) return res.status(400).json({ message: 'Invalid unit' });
+      if (result.badSizeUnit) return res.status(400).json({ message: 'Invalid size unit' });
       if (!result.item) return res.status(404).json({ message: 'Item not found' });
       return res.status(200).json({ item: result.item });
     })
