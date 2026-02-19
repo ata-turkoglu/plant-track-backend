@@ -8,7 +8,6 @@ export async function listItemsByOrganization(organizationId) {
       'id',
       'organization_id',
       'warehouse_type_id',
-      'type',
       'code',
       'name',
       'brand',
@@ -27,7 +26,6 @@ export async function getItemById(id) {
       'id',
       'organization_id',
       'warehouse_type_id',
-      'type',
       'code',
       'name',
       'brand',
@@ -41,13 +39,12 @@ export async function getItemById(id) {
 
 export async function createItem(
   trx,
-  { organizationId, warehouseTypeId, type, code, name, brand, model, sizeSpec, sizeUnitId, unitId, active }
+  { organizationId, warehouseTypeId, code, name, brand, model, sizeSpec, sizeUnitId, unitId, active }
 ) {
   const rows = await trx('items')
     .insert({
       organization_id: organizationId,
       warehouse_type_id: warehouseTypeId,
-      type,
       code,
       name,
       brand: brand ?? null,
@@ -61,7 +58,6 @@ export async function createItem(
       'id',
       'organization_id',
       'warehouse_type_id',
-      'type',
       'code',
       'name',
       'brand',
@@ -96,7 +92,6 @@ export async function updateItem(
       'id',
       'organization_id',
       'warehouse_type_id',
-      'type',
       'code',
       'name',
       'brand',

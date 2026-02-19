@@ -26,8 +26,6 @@ router.get('/organizations/:id/items', (req, res) => {
 });
 
 const createSchema = z.object({
-  // type is derived from warehouse_types.code (kept for backward compatibility).
-  type: z.string().min(1).max(32).optional(),
   warehouse_type_id: z.number().int().positive(),
   code: z.string().min(1).max(64),
   name: z.string().min(1).max(255),
@@ -75,7 +73,6 @@ router.post('/organizations/:id/items', (req, res) => {
         createItem(trx, {
           organizationId,
           warehouseTypeId: wt.id,
-          type: wt.code,
           code: parsed.data.code,
           name: parsed.data.name,
           brand: parsed.data.brand?.trim() || null,
@@ -129,7 +126,7 @@ router.put('/organizations/:id/items/:itemId', (req, res) => {
 
       const existingItem = await db('items')
         .where({ id: itemId, organization_id: organizationId })
-        .first(['id', 'code', 'warehouse_type_id', 'type']);
+        .first(['id', 'code', 'warehouse_type_id']);
       if (!existingItem) return { notFoundItem: true };
 
       // Enforce unique (organization_id, code)

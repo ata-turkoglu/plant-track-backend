@@ -133,8 +133,6 @@ exports.up = async function up(knex) {
       .inTable('organizations')
       .onDelete('CASCADE');
 
-    // Kept for backward compatibility: derived from warehouse_types.code.
-    t.string('type', 32).notNullable();
     t.string('code', 64).notNullable();
     t.string('name', 255).notNullable();
     t.string('brand', 255).nullable();
@@ -150,7 +148,6 @@ exports.up = async function up(knex) {
 
     t.unique(['organization_id', 'code']);
     t.index(['organization_id']);
-    t.index(['organization_id', 'type']);
     t.index(['unit_id']);
     t.index(['size_unit_id']);
     t.index(['organization_id', 'warehouse_type_id']);
