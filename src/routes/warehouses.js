@@ -9,6 +9,7 @@ import {
   updateWarehouse,
   deleteWarehouse
 } from '../models/warehouses.js';
+import { upsertRefNode, deleteRefNode } from '../models/nodes.js';
 import { getWarehouseTypeById } from '../models/warehouseTypes.js';
 import { loadOrganizationContext } from '../middleware/organizationContext.js';
 
@@ -56,6 +57,20 @@ router.post('/organizations/:id/warehouses', (req, res) => {
           locationId: parsed.data.location_id,
           name: parsed.data.name,
           warehouseTypeId: parsed.data.warehouse_type_id
+        }).then(async (created) => {
+          await upsertRefNode(trx, {
+            organizationId,
+            nodeType: 'WAREHOUSE',
+            refTable: 'warehouses',
+            refId: created.id,
+            name: created.name,
+            isStocked: true,
+            metaJson: {
+              location_id: created.location_id,
+              warehouse_type_id: created.warehouse_type_id
+            }
+          });
+          return created;
         })
       );
 
@@ -66,7 +81,16 @@ router.post('/organizations/:id/warehouses', (req, res) => {
       if (result.badType) return res.status(400).json({ message: 'Invalid warehouse type' });
       return res.status(201).json({ warehouse: result.warehouse });
     })
-    .catch(() => res.status(500).json({ message: 'Failed to create warehouse' }));
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error('[warehouses:create] failed', {
+        organizationId,
+        locationId: parsed.data.location_id,
+        warehouseTypeId: parsed.data.warehouse_type_id,
+        error: err?.message ?? String(err)
+      });
+      return res.status(500).json({ message: 'Failed to create warehouse' });
+    });
 });
 
 const patchSchema = z.object({
@@ -106,6 +130,21 @@ router.patch('/warehouses/:id', (req, res) => {
           locationId: parsed.data.location_id,
           name: parsed.data.name,
           warehouseTypeId: parsed.data.warehouse_type_id
+        }).then(async (warehouse) => {
+          if (!warehouse) return null;
+          await upsertRefNode(trx, {
+            organizationId: existing.organization_id,
+            nodeType: 'WAREHOUSE',
+            refTable: 'warehouses',
+            refId: warehouse.id,
+            name: warehouse.name,
+            isStocked: true,
+            metaJson: {
+              location_id: warehouse.location_id,
+              warehouse_type_id: warehouse.warehouse_type_id
+            }
+          });
+          return warehouse;
         })
       );
 
@@ -121,7 +160,14 @@ router.patch('/warehouses/:id', (req, res) => {
       }
       return res.status(200).json({ warehouse: updated });
     })
-    .catch(() => res.status(500).json({ message: 'Failed to update warehouse' }));
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error('[warehouses:update] failed', {
+        warehouseId: id,
+        error: err?.message ?? String(err)
+      });
+      return res.status(500).json({ message: 'Failed to update warehouse' });
+    });
 });
 
 router.delete('/warehouses/:id', (req, res) => {
@@ -136,6 +182,31 @@ router.delete('/warehouses/:id', (req, res) => {
       if (!existing) return { notFound: true };
 
       await db.transaction(async (trx) => {
+        const node = await trx('nodes')
+          .where({
+            organization_id: existing.organization_id,
+            node_type: 'WAREHOUSE',
+            ref_table: 'warehouses',
+            ref_id: String(id)
+          })
+          .first(['id']);
+
+        if (node) {
+          const linkedMovement = await trx('inventory_movement_lines')
+            .where((qb) => qb.where({ from_node_id: node.id }).orWhere({ to_node_id: node.id }))
+            .first(['id']);
+          if (linkedMovement) {
+            throw Object.assign(new Error('WAREHOUSE_NODE_IN_USE'), { code: 'WAREHOUSE_NODE_IN_USE' });
+          }
+        }
+
+        await deleteRefNode(trx, {
+          organizationId: existing.organization_id,
+          nodeType: 'WAREHOUSE',
+          refTable: 'warehouses',
+          refId: id
+        });
+
         await deleteWarehouse(trx, { id, organizationId: existing.organization_id });
       });
 
@@ -145,7 +216,17 @@ router.delete('/warehouses/:id', (req, res) => {
       if (result.notFound) return res.status(404).json({ message: 'Warehouse not found' });
       return res.status(204).send();
     })
-    .catch(() => res.status(500).json({ message: 'Failed to delete warehouse' }));
+    .catch((err) => {
+      if (err?.code === 'WAREHOUSE_NODE_IN_USE') {
+        return res.status(409).json({ message: 'Warehouse is used in inventory movements and cannot be deleted.' });
+      }
+      // eslint-disable-next-line no-console
+      console.error('[warehouses:delete] failed', {
+        warehouseId: id,
+        error: err?.message ?? String(err)
+      });
+      return res.status(500).json({ message: 'Failed to delete warehouse' });
+    });
 });
 
 export default router;

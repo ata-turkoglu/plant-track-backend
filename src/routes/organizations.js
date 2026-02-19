@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import db from '../db/knex.js';
 import { listLocationsByOrganization, createLocation } from '../models/locations.js';
+import { upsertRefNode } from '../models/nodes.js';
 import { loadOrganizationContext } from '../middleware/organizationContext.js';
 
 const router = Router();
@@ -80,6 +81,20 @@ router.post('/organizations/:id/locations', (req, res) => {
           organizationId,
           parentId,
           name: parsed.data.name
+        }).then(async (created) => {
+          await upsertRefNode(trx, {
+            organizationId,
+            nodeType: 'LOCATION',
+            refTable: 'locations',
+            refId: created.id,
+            name: created.name,
+            isStocked: true,
+            metaJson: {
+              parent_id: created.parent_id ?? null
+            }
+          });
+
+          return created;
         })
       );
 

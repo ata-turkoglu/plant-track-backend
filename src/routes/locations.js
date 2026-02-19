@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import db from '../db/knex.js';
 import { getLocationById, hasChildren, updateLocation, deleteLocation } from '../models/locations.js';
+import { upsertRefNode, deleteRefNode } from '../models/nodes.js';
 
 const router = Router();
 
@@ -31,6 +32,22 @@ router.patch('/locations/:id', (req, res) => {
           id,
           organizationId: existing.organization_id,
           name: parsed.data.name
+        }).then(async (location) => {
+          if (!location) return null;
+
+          await upsertRefNode(trx, {
+            organizationId: existing.organization_id,
+            nodeType: 'LOCATION',
+            refTable: 'locations',
+            refId: location.id,
+            name: location.name,
+            isStocked: true,
+            metaJson: {
+              parent_id: location.parent_id ?? null
+            }
+          });
+
+          return location;
         })
       );
 
@@ -57,6 +74,31 @@ router.delete('/locations/:id', (req, res) => {
       if (children) return { hasChildren: true };
 
       await db.transaction(async (trx) => {
+        const node = await trx('nodes')
+          .where({
+            organization_id: existing.organization_id,
+            node_type: 'LOCATION',
+            ref_table: 'locations',
+            ref_id: String(id)
+          })
+          .first(['id']);
+        if (node) {
+          const linkedMovement = await trx('inventory_movement_lines')
+            .where((qb) => qb.where({ from_node_id: node.id }).orWhere({ to_node_id: node.id }))
+            .first(['id']);
+
+          if (linkedMovement) {
+            throw Object.assign(new Error('LOCATION_NODE_IN_USE'), { code: 'LOCATION_NODE_IN_USE' });
+          }
+        }
+
+        await deleteRefNode(trx, {
+          organizationId: existing.organization_id,
+          nodeType: 'LOCATION',
+          refTable: 'locations',
+          refId: id
+        });
+
         await deleteLocation(trx, { id, organizationId: existing.organization_id });
       });
 
@@ -69,7 +111,12 @@ router.delete('/locations/:id', (req, res) => {
       }
       return res.status(204).send();
     })
-    .catch(() => res.status(500).json({ message: 'Failed to delete location' }));
+    .catch((err) => {
+      if (err?.code === 'LOCATION_NODE_IN_USE') {
+        return res.status(409).json({ message: 'Location is used in inventory movements and cannot be deleted.' });
+      }
+      return res.status(500).json({ message: 'Failed to delete location' });
+    });
 });
 
 export default router;

@@ -58,7 +58,7 @@ export async function listMovementsByOrganization(organizationId, limit = 100) {
 
 export async function createMovementEvent(
   trx,
-  { organizationId, eventType, status = 'POSTED', occurredAt, referenceType, referenceId, note, createdByUserId, lines }
+  { organizationId, eventType, status = 'DRAFT', occurredAt, referenceType, referenceId, note, createdByUserId, lines }
 ) {
   const eventRows = await trx('inventory_movement_events')
     .insert({

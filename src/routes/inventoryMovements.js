@@ -150,9 +150,31 @@ router.get('/organizations/:id/inventory-balances', (req, res) => {
   return Promise.resolve()
     .then(() => listBalancesByOrganization(organizationId, { nodeIds, itemIds, statuses, fromDate, toDate }))
     .then((balances) => {
+      // eslint-disable-next-line no-console
+      console.info('[inventory-balances:list]', {
+        organizationId,
+        nodeCount: nodeIds.length,
+        itemCount: itemIds.length,
+        statuses,
+        fromDate: fromDate ?? null,
+        toDate: toDate ?? null,
+        resultCount: balances.length
+      });
       return res.status(200).json({ balances });
     })
-    .catch(() => res.status(500).json({ message: 'Failed to fetch balances' }));
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error('[inventory-balances:list] failed', {
+        organizationId,
+        nodeCount: nodeIds.length,
+        itemCount: itemIds.length,
+        statuses,
+        fromDate: fromDate ?? null,
+        toDate: toDate ?? null,
+        error: err?.message ?? String(err)
+      });
+      return res.status(500).json({ message: 'Failed to fetch balances' });
+    });
 });
 
 router.post('/organizations/:id/inventory-movements', (req, res) => {
@@ -184,7 +206,7 @@ router.post('/organizations/:id/inventory-movements', (req, res) => {
         createMovementEvent(trx, {
           organizationId,
           eventType,
-          status: parsed.data.status ?? 'POSTED',
+          status: 'DRAFT',
           occurredAt,
           referenceType: parsed.data.reference_type,
           referenceId: parsed.data.reference_id,
@@ -202,9 +224,24 @@ router.post('/organizations/:id/inventory-movements', (req, res) => {
       if (result.badItem) return res.status(400).json({ message: 'Invalid item' });
       if (result.badUnit) return res.status(400).json({ message: 'Invalid unit' });
       if (result.sameNode) return res.status(400).json({ message: 'From and to node cannot be same' });
+      // eslint-disable-next-line no-console
+      console.info('[inventory-movements:create]', {
+        organizationId,
+        eventId: result.event?.id ?? null,
+        status: result.event?.status ?? null,
+        lineCount: Array.isArray(result.lines) ? result.lines.length : 0
+      });
       return res.status(201).json({ event: result.event, lines: result.lines, movement: result.lines[0] });
     })
-    .catch(() => res.status(500).json({ message: 'Failed to create movement event' }));
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error('[inventory-movements:create] failed', {
+        organizationId,
+        lineCount: linesInput.length,
+        error: err?.message ?? String(err)
+      });
+      return res.status(500).json({ message: 'Failed to create movement event' });
+    });
 });
 
 router.put('/organizations/:id/inventory-movements/:movementId', (req, res) => {
@@ -268,7 +305,15 @@ router.put('/organizations/:id/inventory-movements/:movementId', (req, res) => {
       if (!result?.line) return res.status(404).json({ message: 'Movement not found' });
       return res.status(200).json({ movement: result.line });
     })
-    .catch(() => res.status(500).json({ message: 'Failed to update movement' }));
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error('[inventory-movements:update] failed', {
+        organizationId,
+        movementId,
+        error: err?.message ?? String(err)
+      });
+      return res.status(500).json({ message: 'Failed to update movement' });
+    });
 });
 
 router.delete('/organizations/:id/inventory-movements/:movementId', (req, res) => {
