@@ -10,23 +10,17 @@ import {
   deleteWarehouse
 } from '../models/warehouses.js';
 import { getWarehouseTypeById } from '../models/warehouseTypes.js';
+import { loadOrganizationContext } from '../middleware/organizationContext.js';
 
 const router = Router();
+router.use('/organizations/:id', loadOrganizationContext);
 
 router.get('/organizations/:id/warehouses', (req, res) => {
-  const organizationId = Number(req.params.id);
-  if (!Number.isFinite(organizationId)) {
-    return res.status(400).json({ message: 'Invalid organization id' });
-  }
+  const organizationId = req.organizationId;
 
   return Promise.resolve()
-    .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return null;
-      return listWarehousesByOrganization(organizationId);
-    })
+    .then(() => listWarehousesByOrganization(organizationId))
     .then((warehouses) => {
-      if (!warehouses) return res.status(404).json({ message: 'Organization not found' });
       return res.status(200).json({ warehouses });
     })
     .catch(() => res.status(500).json({ message: 'Failed to fetch warehouses' }));
@@ -39,10 +33,7 @@ const createSchema = z.object({
 });
 
 router.post('/organizations/:id/warehouses', (req, res) => {
-  const organizationId = Number(req.params.id);
-  if (!Number.isFinite(organizationId)) {
-    return res.status(400).json({ message: 'Invalid organization id' });
-  }
+  const organizationId = req.organizationId;
 
   const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -51,9 +42,6 @@ router.post('/organizations/:id/warehouses', (req, res) => {
 
   return Promise.resolve()
     .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return { notFound: true };
-
       const location = await db('locations')
         .where({ id: parsed.data.location_id, organization_id: organizationId })
         .first(['id']);
@@ -74,7 +62,6 @@ router.post('/organizations/:id/warehouses', (req, res) => {
       return { warehouse };
     })
     .then((result) => {
-      if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.badLocation) return res.status(400).json({ message: 'Invalid location' });
       if (result.badType) return res.status(400).json({ message: 'Invalid warehouse type' });
       return res.status(201).json({ warehouse: result.warehouse });

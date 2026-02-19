@@ -2,23 +2,25 @@ import { Router } from 'express';
 import { z } from 'zod';
 
 import db from '../db/knex.js';
-import { listCustomersByOrganization, createCustomer, updateCustomer, deleteCustomer } from '../models/customers.js';
+import {
+  listCustomersByOrganization,
+  createCustomer,
+  updateCustomer,
+  deleteCustomer,
+  findCustomerConflict
+} from '../models/customers.js';
 import { upsertRefNode, deleteRefNode } from '../models/nodes.js';
+import { loadOrganizationContext } from '../middleware/organizationContext.js';
 
 const router = Router();
+router.use('/organizations/:id', loadOrganizationContext);
 
 router.get('/organizations/:id/customers', (req, res) => {
-  const organizationId = Number(req.params.id);
-  if (!Number.isFinite(organizationId)) return res.status(400).json({ message: 'Invalid organization id' });
+  const organizationId = req.organizationId;
 
   return Promise.resolve()
-    .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return null;
-      return listCustomersByOrganization(organizationId);
-    })
+    .then(() => listCustomersByOrganization(organizationId))
     .then((customers) => {
-      if (!customers) return res.status(404).json({ message: 'Organization not found' });
       return res.status(200).json({ customers });
     })
     .catch(() => res.status(500).json({ message: 'Failed to fetch customers' }));
@@ -36,8 +38,7 @@ const createSchema = z.object({
 });
 
 router.post('/organizations/:id/customers', (req, res) => {
-  const organizationId = Number(req.params.id);
-  if (!Number.isFinite(organizationId)) return res.status(400).json({ message: 'Invalid organization id' });
+  const organizationId = req.organizationId;
 
   const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -46,28 +47,17 @@ router.post('/organizations/:id/customers', (req, res) => {
 
   return Promise.resolve()
     .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return { notFound: true };
-
-      const conflict = await db('customers')
-        .where({ organization_id: organizationId })
-        .whereRaw('lower(name) = lower(?)', [parsed.data.name])
-        .first(['id']);
-      if (conflict) return { conflict: true };
-
-      if (parsed.data.email) {
-        const emailConflict = await db('customers')
-          .where({ organization_id: organizationId })
-          .whereRaw('lower(email) = lower(?)', [parsed.data.email])
-          .first(['id']);
-        if (emailConflict) return { conflictEmail: true };
-      }
-
-      if (parsed.data.phone) {
-        const phoneConflict = await db('customers')
-          .where({ organization_id: organizationId, phone: parsed.data.phone })
-          .first(['id']);
-        if (phoneConflict) return { conflictPhone: true };
+      const conflict = await findCustomerConflict(organizationId, {
+        name: parsed.data.name,
+        email: parsed.data.email ?? undefined,
+        phone: parsed.data.phone ?? undefined
+      });
+      if (conflict) {
+        if (String(conflict.name).toLowerCase() === String(parsed.data.name).toLowerCase()) return { conflict: true };
+        if (parsed.data.email && conflict.email && String(conflict.email).toLowerCase() === String(parsed.data.email).toLowerCase()) {
+          return { conflictEmail: true };
+        }
+        if (parsed.data.phone && conflict.phone && String(conflict.phone) === String(parsed.data.phone)) return { conflictPhone: true };
       }
 
       const customer = await db.transaction(async (trx) =>
@@ -102,7 +92,6 @@ router.post('/organizations/:id/customers', (req, res) => {
       return { customer };
     })
     .then((result) => {
-      if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.conflict) return res.status(409).json({ message: 'Customer already exists' });
       if (result.conflictEmail) return res.status(409).json({ message: 'Customer email already exists' });
       if (result.conflictPhone) return res.status(409).json({ message: 'Customer phone already exists' });
@@ -123,9 +112,8 @@ const updateSchema = z.object({
 });
 
 router.put('/organizations/:id/customers/:customerId', (req, res) => {
-  const organizationId = Number(req.params.id);
+  const organizationId = req.organizationId;
   const customerId = Number(req.params.customerId);
-  if (!Number.isFinite(organizationId)) return res.status(400).json({ message: 'Invalid organization id' });
   if (!Number.isFinite(customerId)) return res.status(400).json({ message: 'Invalid customer id' });
 
   const parsed = updateSchema.safeParse(req.body);
@@ -135,34 +123,21 @@ router.put('/organizations/:id/customers/:customerId', (req, res) => {
 
   return Promise.resolve()
     .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return { notFound: true };
-
       const existing = await db('customers').where({ id: customerId, organization_id: organizationId }).first(['id']);
       if (!existing) return { notFoundCustomer: true };
 
-      const conflict = await db('customers')
-        .where({ organization_id: organizationId })
-        .whereNot({ id: customerId })
-        .whereRaw('lower(name) = lower(?)', [parsed.data.name])
-        .first(['id']);
-      if (conflict) return { conflict: true };
-
-      if (parsed.data.email) {
-        const emailConflict = await db('customers')
-          .where({ organization_id: organizationId })
-          .whereNot({ id: customerId })
-          .whereRaw('lower(email) = lower(?)', [parsed.data.email])
-          .first(['id']);
-        if (emailConflict) return { conflictEmail: true };
-      }
-
-      if (parsed.data.phone) {
-        const phoneConflict = await db('customers')
-          .where({ organization_id: organizationId, phone: parsed.data.phone })
-          .whereNot({ id: customerId })
-          .first(['id']);
-        if (phoneConflict) return { conflictPhone: true };
+      const conflict = await findCustomerConflict(organizationId, {
+        name: parsed.data.name,
+        email: parsed.data.email ?? undefined,
+        phone: parsed.data.phone ?? undefined,
+        excludeId: customerId
+      });
+      if (conflict) {
+        if (String(conflict.name).toLowerCase() === String(parsed.data.name).toLowerCase()) return { conflict: true };
+        if (parsed.data.email && conflict.email && String(conflict.email).toLowerCase() === String(parsed.data.email).toLowerCase()) {
+          return { conflictEmail: true };
+        }
+        if (parsed.data.phone && conflict.phone && String(conflict.phone) === String(parsed.data.phone)) return { conflictPhone: true };
       }
 
       const customer = await db.transaction(async (trx) =>
@@ -199,7 +174,6 @@ router.put('/organizations/:id/customers/:customerId', (req, res) => {
       return { customer };
     })
     .then((result) => {
-      if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.notFoundCustomer) return res.status(404).json({ message: 'Customer not found' });
       if (result.conflict) return res.status(409).json({ message: 'Customer already exists' });
       if (result.conflictEmail) return res.status(409).json({ message: 'Customer email already exists' });
@@ -211,16 +185,12 @@ router.put('/organizations/:id/customers/:customerId', (req, res) => {
 });
 
 router.delete('/organizations/:id/customers/:customerId', (req, res) => {
-  const organizationId = Number(req.params.id);
+  const organizationId = req.organizationId;
   const customerId = Number(req.params.customerId);
-  if (!Number.isFinite(organizationId)) return res.status(400).json({ message: 'Invalid organization id' });
   if (!Number.isFinite(customerId)) return res.status(400).json({ message: 'Invalid customer id' });
 
   return Promise.resolve()
     .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return { notFound: true };
-
       const existing = await db('customers').where({ id: customerId, organization_id: organizationId }).first(['id']);
       if (!existing) return { notFoundCustomer: true };
 
@@ -240,7 +210,6 @@ router.delete('/organizations/:id/customers/:customerId', (req, res) => {
       return { ok: true };
     })
     .then((result) => {
-      if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.notFoundCustomer) return res.status(404).json({ message: 'Customer not found' });
       return res.status(204).send();
     })

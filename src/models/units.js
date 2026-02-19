@@ -2,6 +2,16 @@ import db from '../db/knex.js';
 
 export async function listUnitsByOrganization(organizationId) {
   return db({ u: 'units' })
+    .leftJoin({ tu: 'translations' }, function joinUnitTranslations() {
+      this.on('tu.organization_id', '=', 'u.organization_id')
+        .andOn(db.raw("tu.namespace = 'unit'"))
+        .andOn(db.raw('tu.entry_key = lower(u.code)'));
+    })
+    .leftJoin({ ts: 'translations' }, function joinUnitSymbolTranslations() {
+      this.on('ts.organization_id', '=', 'u.organization_id')
+        .andOn(db.raw("ts.namespace = 'unit_symbol'"))
+        .andOn(db.raw('ts.entry_key = lower(u.symbol)'));
+    })
     .where({ 'u.organization_id': organizationId })
     .orderBy([
       { column: 'u.system', order: 'desc' },
@@ -18,18 +28,10 @@ export async function listUnitsByOrganization(organizationId) {
       'u.active',
       'u.created_at',
       'u.updated_at',
-      db.raw(
-        `(select t.tr from translations t where t.organization_id = u.organization_id and t.namespace = 'unit' and t.entry_key = lower(u.code) limit 1) as tr_name`
-      ),
-      db.raw(
-        `(select t.en from translations t where t.organization_id = u.organization_id and t.namespace = 'unit' and t.entry_key = lower(u.code) limit 1) as en_name`
-      ),
-      db.raw(
-        `(select t.tr from translations t where t.organization_id = u.organization_id and t.namespace = 'unit_symbol' and t.entry_key = lower(u.symbol) limit 1) as tr_symbol`
-      ),
-      db.raw(
-        `(select t.en from translations t where t.organization_id = u.organization_id and t.namespace = 'unit_symbol' and t.entry_key = lower(u.symbol) limit 1) as en_symbol`
-      )
+      db.raw('tu.tr as tr_name'),
+      db.raw('tu.en as en_name'),
+      db.raw('ts.tr as tr_symbol'),
+      db.raw('ts.en as en_symbol')
     ]);
 }
 

@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
-import db from '../db/knex.js';
 import {
   createTranslation,
   deleteTranslationById,
@@ -9,8 +8,11 @@ import {
   listTranslationsByOrganization,
   updateTranslation
 } from '../models/translations.js';
+import db from '../db/knex.js';
+import { loadOrganizationContext } from '../middleware/organizationContext.js';
 
 const router = Router();
+router.use('/organizations/:id', loadOrganizationContext);
 
 const upsertSchema = z.object({
   namespace: z.string().trim().min(1).max(64),
@@ -20,31 +22,20 @@ const upsertSchema = z.object({
 });
 
 router.get('/organizations/:id/translations', (req, res) => {
-  const organizationId = Number(req.params.id);
-  if (!Number.isFinite(organizationId)) {
-    return res.status(400).json({ message: 'Invalid organization id' });
-  }
+  const organizationId = req.organizationId;
 
   const namespace = typeof req.query.namespace === 'string' ? req.query.namespace : undefined;
 
   return Promise.resolve()
-    .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return null;
-      return listTranslationsByOrganization(organizationId, { namespace });
-    })
+    .then(() => listTranslationsByOrganization(organizationId, { namespace }))
     .then((translations) => {
-      if (!translations) return res.status(404).json({ message: 'Organization not found' });
       return res.status(200).json({ translations });
     })
     .catch(() => res.status(500).json({ message: 'Failed to fetch translations' }));
 });
 
 router.post('/organizations/:id/translations', (req, res) => {
-  const organizationId = Number(req.params.id);
-  if (!Number.isFinite(organizationId)) {
-    return res.status(400).json({ message: 'Invalid organization id' });
-  }
+  const organizationId = req.organizationId;
 
   const parsed = upsertSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -53,9 +44,6 @@ router.post('/organizations/:id/translations', (req, res) => {
 
   return Promise.resolve()
     .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return { notFound: true };
-
       const conflict = await db('translations')
         .where({
           organization_id: organizationId,
@@ -78,7 +66,6 @@ router.post('/organizations/:id/translations', (req, res) => {
       return { translation };
     })
     .then((result) => {
-      if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.conflict) return res.status(409).json({ message: 'Translation already exists for this key' });
       return res.status(201).json({ translation: result.translation });
     })
@@ -86,11 +73,8 @@ router.post('/organizations/:id/translations', (req, res) => {
 });
 
 router.put('/organizations/:id/translations/:translationId', (req, res) => {
-  const organizationId = Number(req.params.id);
+  const organizationId = req.organizationId;
   const translationId = Number(req.params.translationId);
-  if (!Number.isFinite(organizationId)) {
-    return res.status(400).json({ message: 'Invalid organization id' });
-  }
   if (!Number.isFinite(translationId)) {
     return res.status(400).json({ message: 'Invalid translation id' });
   }
@@ -102,9 +86,6 @@ router.put('/organizations/:id/translations/:translationId', (req, res) => {
 
   return Promise.resolve()
     .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return { notFound: true };
-
       const existing = await getTranslationById(translationId);
       if (!existing || existing.organization_id !== organizationId) return { notFoundTranslation: true };
 
@@ -132,7 +113,6 @@ router.put('/organizations/:id/translations/:translationId', (req, res) => {
       return { translation };
     })
     .then((result) => {
-      if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.notFoundTranslation) return res.status(404).json({ message: 'Translation not found' });
       if (result.conflict) return res.status(409).json({ message: 'Translation already exists for this key' });
       if (!result.translation) return res.status(404).json({ message: 'Translation not found' });
@@ -142,20 +122,14 @@ router.put('/organizations/:id/translations/:translationId', (req, res) => {
 });
 
 router.delete('/organizations/:id/translations/:translationId', (req, res) => {
-  const organizationId = Number(req.params.id);
+  const organizationId = req.organizationId;
   const translationId = Number(req.params.translationId);
-  if (!Number.isFinite(organizationId)) {
-    return res.status(400).json({ message: 'Invalid organization id' });
-  }
   if (!Number.isFinite(translationId)) {
     return res.status(400).json({ message: 'Invalid translation id' });
   }
 
   return Promise.resolve()
     .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return { notFound: true };
-
       const existing = await getTranslationById(translationId);
       if (!existing || existing.organization_id !== organizationId) return { notFoundTranslation: true };
 
@@ -164,7 +138,6 @@ router.delete('/organizations/:id/translations/:translationId', (req, res) => {
       return { ok: true };
     })
     .then((result) => {
-      if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.notFoundTranslation) return res.status(404).json({ message: 'Translation not found' });
       return res.status(204).send();
     })

@@ -2,25 +2,27 @@ import { Router } from 'express';
 import { z } from 'zod';
 
 import db from '../db/knex.js';
-import { listSuppliersByOrganization, createSupplier, updateSupplier, deleteSupplier } from '../models/suppliers.js';
+import {
+  listSuppliersByOrganization,
+  createSupplier,
+  updateSupplier,
+  deleteSupplier,
+  findSupplierConflict
+} from '../models/suppliers.js';
 import { upsertRefNode, deleteRefNode } from '../models/nodes.js';
+import { loadOrganizationContext } from '../middleware/organizationContext.js';
 
 const router = Router();
+router.use('/organizations/:id', loadOrganizationContext);
 
 router.get('/organizations/:id/suppliers', (req, res) => {
-  const organizationId = Number(req.params.id);
-  if (!Number.isFinite(organizationId)) return res.status(400).json({ message: 'Invalid organization id' });
+  const organizationId = req.organizationId;
 
   const kind = typeof req.query.kind === 'string' ? req.query.kind : undefined;
 
   return Promise.resolve()
-    .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return null;
-      return listSuppliersByOrganization(organizationId, { kind });
-    })
+    .then(() => listSuppliersByOrganization(organizationId, { kind }))
     .then((suppliers) => {
-      if (!suppliers) return res.status(404).json({ message: 'Organization not found' });
       return res.status(200).json({ suppliers });
     })
     .catch(() => res.status(500).json({ message: 'Failed to fetch suppliers' }));
@@ -39,8 +41,7 @@ const createSchema = z.object({
 });
 
 router.post('/organizations/:id/suppliers', (req, res) => {
-  const organizationId = Number(req.params.id);
-  if (!Number.isFinite(organizationId)) return res.status(400).json({ message: 'Invalid organization id' });
+  const organizationId = req.organizationId;
 
   const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -49,28 +50,20 @@ router.post('/organizations/:id/suppliers', (req, res) => {
 
   return Promise.resolve()
     .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return { notFound: true };
-
-      const conflict = await db('suppliers')
-        .where({ organization_id: organizationId, kind: parsed.data.kind })
-        .whereRaw('lower(name) = lower(?)', [parsed.data.name])
-        .first(['id']);
-      if (conflict) return { conflict: true };
-
-      if (parsed.data.email) {
-        const emailConflict = await db('suppliers')
-          .where({ organization_id: organizationId })
-          .whereRaw('lower(email) = lower(?)', [parsed.data.email])
-          .first(['id']);
-        if (emailConflict) return { conflictEmail: true };
-      }
-
-      if (parsed.data.phone) {
-        const phoneConflict = await db('suppliers')
-          .where({ organization_id: organizationId, phone: parsed.data.phone })
-          .first(['id']);
-        if (phoneConflict) return { conflictPhone: true };
+      const conflict = await findSupplierConflict(organizationId, {
+        kind: parsed.data.kind,
+        name: parsed.data.name,
+        email: parsed.data.email ?? undefined,
+        phone: parsed.data.phone ?? undefined
+      });
+      if (conflict) {
+        if (String(conflict.kind) === String(parsed.data.kind) && String(conflict.name).toLowerCase() === String(parsed.data.name).toLowerCase()) {
+          return { conflict: true };
+        }
+        if (parsed.data.email && conflict.email && String(conflict.email).toLowerCase() === String(parsed.data.email).toLowerCase()) {
+          return { conflictEmail: true };
+        }
+        if (parsed.data.phone && conflict.phone && String(conflict.phone) === String(parsed.data.phone)) return { conflictPhone: true };
       }
 
       const supplier = await db.transaction(async (trx) =>
@@ -108,7 +101,6 @@ router.post('/organizations/:id/suppliers', (req, res) => {
       return { supplier };
     })
     .then((result) => {
-      if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.conflict) return res.status(409).json({ message: 'Supplier already exists' });
       if (result.conflictEmail) return res.status(409).json({ message: 'Supplier email already exists' });
       if (result.conflictPhone) return res.status(409).json({ message: 'Supplier phone already exists' });
@@ -130,9 +122,8 @@ const updateSchema = z.object({
 });
 
 router.put('/organizations/:id/suppliers/:supplierId', (req, res) => {
-  const organizationId = Number(req.params.id);
+  const organizationId = req.organizationId;
   const supplierId = Number(req.params.supplierId);
-  if (!Number.isFinite(organizationId)) return res.status(400).json({ message: 'Invalid organization id' });
   if (!Number.isFinite(supplierId)) return res.status(400).json({ message: 'Invalid supplier id' });
 
   const parsed = updateSchema.safeParse(req.body);
@@ -142,34 +133,24 @@ router.put('/organizations/:id/suppliers/:supplierId', (req, res) => {
 
   return Promise.resolve()
     .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return { notFound: true };
-
       const existing = await db('suppliers').where({ id: supplierId, organization_id: organizationId }).first(['id']);
       if (!existing) return { notFoundSupplier: true };
 
-      const conflict = await db('suppliers')
-        .where({ organization_id: organizationId, kind: parsed.data.kind })
-        .whereNot({ id: supplierId })
-        .whereRaw('lower(name) = lower(?)', [parsed.data.name])
-        .first(['id']);
-      if (conflict) return { conflict: true };
-
-      if (parsed.data.email) {
-        const emailConflict = await db('suppliers')
-          .where({ organization_id: organizationId })
-          .whereNot({ id: supplierId })
-          .whereRaw('lower(email) = lower(?)', [parsed.data.email])
-          .first(['id']);
-        if (emailConflict) return { conflictEmail: true };
-      }
-
-      if (parsed.data.phone) {
-        const phoneConflict = await db('suppliers')
-          .where({ organization_id: organizationId, phone: parsed.data.phone })
-          .whereNot({ id: supplierId })
-          .first(['id']);
-        if (phoneConflict) return { conflictPhone: true };
+      const conflict = await findSupplierConflict(organizationId, {
+        kind: parsed.data.kind,
+        name: parsed.data.name,
+        email: parsed.data.email ?? undefined,
+        phone: parsed.data.phone ?? undefined,
+        excludeId: supplierId
+      });
+      if (conflict) {
+        if (String(conflict.kind) === String(parsed.data.kind) && String(conflict.name).toLowerCase() === String(parsed.data.name).toLowerCase()) {
+          return { conflict: true };
+        }
+        if (parsed.data.email && conflict.email && String(conflict.email).toLowerCase() === String(parsed.data.email).toLowerCase()) {
+          return { conflictEmail: true };
+        }
+        if (parsed.data.phone && conflict.phone && String(conflict.phone) === String(parsed.data.phone)) return { conflictPhone: true };
       }
 
       const supplier = await db.transaction(async (trx) =>
@@ -209,7 +190,6 @@ router.put('/organizations/:id/suppliers/:supplierId', (req, res) => {
       return { supplier };
     })
     .then((result) => {
-      if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.notFoundSupplier) return res.status(404).json({ message: 'Supplier not found' });
       if (result.conflict) return res.status(409).json({ message: 'Supplier already exists' });
       if (result.conflictEmail) return res.status(409).json({ message: 'Supplier email already exists' });
@@ -221,16 +201,12 @@ router.put('/organizations/:id/suppliers/:supplierId', (req, res) => {
 });
 
 router.delete('/organizations/:id/suppliers/:supplierId', (req, res) => {
-  const organizationId = Number(req.params.id);
+  const organizationId = req.organizationId;
   const supplierId = Number(req.params.supplierId);
-  if (!Number.isFinite(organizationId)) return res.status(400).json({ message: 'Invalid organization id' });
   if (!Number.isFinite(supplierId)) return res.status(400).json({ message: 'Invalid supplier id' });
 
   return Promise.resolve()
     .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return { notFound: true };
-
       const existing = await db('suppliers').where({ id: supplierId, organization_id: organizationId }).first(['id']);
       if (!existing) return { notFoundSupplier: true };
 
@@ -250,7 +226,6 @@ router.delete('/organizations/:id/suppliers/:supplierId', (req, res) => {
       return { ok: true };
     })
     .then((result) => {
-      if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.notFoundSupplier) return res.status(404).json({ message: 'Supplier not found' });
       return res.status(204).send();
     })

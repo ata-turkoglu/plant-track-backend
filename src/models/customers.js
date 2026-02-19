@@ -109,3 +109,26 @@ export async function deleteCustomer(trx, { organizationId, customerId }) {
   const rows = await trx('customers').where({ id: customerId, organization_id: organizationId }).del().returning(['id']);
   return rows[0] ?? null;
 }
+
+export async function findCustomerConflict(organizationId, { name, email, phone, excludeId } = {}) {
+  const query = db('customers').where({ organization_id: organizationId });
+  if (excludeId) query.whereNot({ id: excludeId });
+
+  const checks = [];
+  if (name) checks.push({ field: 'name', value: name });
+  if (email) checks.push({ field: 'email', value: email });
+  if (phone) checks.push({ field: 'phone', value: phone });
+  if (checks.length === 0) return null;
+
+  query.andWhere((builder) => {
+    for (const check of checks) {
+      if (check.field === 'phone') {
+        builder.orWhere('phone', check.value);
+        continue;
+      }
+      builder.orWhereRaw(`lower(${check.field}) = lower(?)`, [check.value]);
+    }
+  });
+
+  return query.first(['id', 'name', 'email', 'phone']);
+}

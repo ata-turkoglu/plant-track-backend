@@ -117,3 +117,33 @@ export async function deleteSupplier(trx, { organizationId, supplierId }) {
   const rows = await trx('suppliers').where({ id: supplierId, organization_id: organizationId }).del().returning(['id']);
   return rows[0] ?? null;
 }
+
+export async function findSupplierConflict(organizationId, { kind, name, email, phone, excludeId } = {}) {
+  const query = db('suppliers').where({ organization_id: organizationId });
+  if (excludeId) query.whereNot({ id: excludeId });
+
+  const checks = [];
+  if (name) checks.push({ field: 'name', value: name, scopedByKind: true });
+  if (email) checks.push({ field: 'email', value: email, scopedByKind: false });
+  if (phone) checks.push({ field: 'phone', value: phone, scopedByKind: false });
+  if (checks.length === 0) return null;
+
+  query.andWhere((builder) => {
+    for (const check of checks) {
+      if (check.field === 'phone') {
+        builder.orWhere((nested) => {
+          if (check.scopedByKind && kind) nested.where({ kind });
+          nested.andWhere('phone', check.value);
+        });
+        continue;
+      }
+
+      builder.orWhere((nested) => {
+        if (check.scopedByKind && kind) nested.where({ kind });
+        nested.andWhereRaw(`lower(${check.field}) = lower(?)`, [check.value]);
+      });
+    }
+  });
+
+  return query.first(['id', 'kind', 'name', 'email', 'phone']);
+}

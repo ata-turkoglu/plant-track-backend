@@ -5,21 +5,17 @@ import db from '../db/knex.js';
 import { listItemsByOrganization, createItem, updateItem, setItemActive } from '../models/items.js';
 import { getUnitById } from '../models/units.js';
 import { getWarehouseTypeById } from '../models/warehouseTypes.js';
+import { loadOrganizationContext } from '../middleware/organizationContext.js';
 
 const router = Router();
+router.use('/organizations/:id', loadOrganizationContext);
 
 router.get('/organizations/:id/items', (req, res) => {
-  const organizationId = Number(req.params.id);
-  if (!Number.isFinite(organizationId)) return res.status(400).json({ message: 'Invalid organization id' });
+  const organizationId = req.organizationId;
 
   return Promise.resolve()
-    .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return null;
-      return listItemsByOrganization(organizationId);
-    })
+    .then(() => listItemsByOrganization(organizationId))
     .then((items) => {
-      if (!items) return res.status(404).json({ message: 'Organization not found' });
       return res.status(200).json({ items });
     })
     .catch(() => res.status(500).json({ message: 'Failed to fetch items' }));
@@ -38,8 +34,7 @@ const createSchema = z.object({
 });
 
 router.post('/organizations/:id/items', (req, res) => {
-  const organizationId = Number(req.params.id);
-  if (!Number.isFinite(organizationId)) return res.status(400).json({ message: 'Invalid organization id' });
+  const organizationId = req.organizationId;
 
   const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -48,9 +43,6 @@ router.post('/organizations/:id/items', (req, res) => {
 
   return Promise.resolve()
     .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return { notFound: true };
-
       // Enforce unique (organization_id, code)
       const existing = await db('items')
         .where({ organization_id: organizationId })
@@ -87,7 +79,6 @@ router.post('/organizations/:id/items', (req, res) => {
       return { item };
     })
     .then((result) => {
-      if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.conflict) return res.status(409).json({ message: 'Item code already exists' });
       if (result.badUnit) return res.status(400).json({ message: 'Invalid unit' });
       if (result.badSizeUnit) return res.status(400).json({ message: 'Invalid size unit' });
@@ -109,9 +100,8 @@ const updateSchema = z.object({
 });
 
 router.put('/organizations/:id/items/:itemId', (req, res) => {
-  const organizationId = Number(req.params.id);
+  const organizationId = req.organizationId;
   const itemId = Number(req.params.itemId);
-  if (!Number.isFinite(organizationId)) return res.status(400).json({ message: 'Invalid organization id' });
   if (!Number.isFinite(itemId)) return res.status(400).json({ message: 'Invalid item id' });
 
   const parsed = updateSchema.safeParse(req.body);
@@ -121,9 +111,6 @@ router.put('/organizations/:id/items/:itemId', (req, res) => {
 
   return Promise.resolve()
     .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return { notFound: true };
-
       const existingItem = await db('items')
         .where({ id: itemId, organization_id: organizationId })
         .first(['id', 'code', 'warehouse_type_id']);
@@ -163,7 +150,6 @@ router.put('/organizations/:id/items/:itemId', (req, res) => {
       return { item };
     })
     .then((result) => {
-      if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.notFoundItem) return res.status(404).json({ message: 'Item not found' });
       if (result.conflict) return res.status(409).json({ message: 'Item code already exists' });
       if (result.badUnit) return res.status(400).json({ message: 'Invalid unit' });
@@ -175,16 +161,12 @@ router.put('/organizations/:id/items/:itemId', (req, res) => {
 });
 
 router.delete('/organizations/:id/items/:itemId', (req, res) => {
-  const organizationId = Number(req.params.id);
+  const organizationId = req.organizationId;
   const itemId = Number(req.params.itemId);
-  if (!Number.isFinite(organizationId)) return res.status(400).json({ message: 'Invalid organization id' });
   if (!Number.isFinite(itemId)) return res.status(400).json({ message: 'Invalid item id' });
 
   return Promise.resolve()
     .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return { notFound: true };
-
       const existingItem = await db('items').where({ id: itemId, organization_id: organizationId }).first(['id']);
       if (!existingItem) return { notFoundItem: true };
 
@@ -194,7 +176,6 @@ router.delete('/organizations/:id/items/:itemId', (req, res) => {
       return { ok: true };
     })
     .then((result) => {
-      if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.notFoundItem) return res.status(404).json({ message: 'Item not found' });
       return res.status(204).send();
     })

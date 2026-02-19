@@ -3,26 +3,13 @@ import { z } from 'zod';
 
 import db from '../db/knex.js';
 import { listLocationsByOrganization, createLocation } from '../models/locations.js';
+import { loadOrganizationContext } from '../middleware/organizationContext.js';
 
 const router = Router();
+router.use('/organizations/:id', loadOrganizationContext);
 
 router.get('/organizations/:id', (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) {
-    return res.status(400).json({ message: 'Invalid organization id' });
-  }
-
-  return Promise.resolve()
-    .then(async () => {
-      const org = await db('organizations').where({ id }).first(['id', 'name', 'code']);
-      if (!org) return null;
-      return org;
-    })
-    .then((org) => {
-      if (!org) return res.status(404).json({ message: 'Organization not found' });
-      return res.status(200).json({ organization: org });
-    })
-    .catch(() => res.status(500).json({ message: 'Failed to fetch organization' }));
+  return res.status(200).json({ organization: req.organization });
 });
 
 const patchOrgSchema = z.object({
@@ -30,10 +17,7 @@ const patchOrgSchema = z.object({
 });
 
 router.patch('/organizations/:id', (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) {
-    return res.status(400).json({ message: 'Invalid organization id' });
-  }
+  const id = req.organizationId;
 
   const parsed = patchOrgSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -57,20 +41,10 @@ router.patch('/organizations/:id', (req, res) => {
 });
 
 router.get('/organizations/:id/locations', (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) {
-    return res.status(400).json({ message: 'Invalid organization id' });
-  }
-
+  const organizationId = req.organizationId;
   return Promise.resolve()
-    .then(async () => {
-      const org = await db('organizations').where({ id }).first(['id']);
-      if (!org) return null;
-      const locations = await listLocationsByOrganization(id);
-      return locations;
-    })
+    .then(() => listLocationsByOrganization(organizationId))
     .then((locations) => {
-      if (!locations) return res.status(404).json({ message: 'Organization not found' });
       return res.status(200).json({ locations });
     })
     .catch(() => res.status(500).json({ message: 'Failed to fetch locations' }));
@@ -82,10 +56,7 @@ const createLocationSchema = z.object({
 });
 
 router.post('/organizations/:id/locations', (req, res) => {
-  const organizationId = Number(req.params.id);
-  if (!Number.isFinite(organizationId)) {
-    return res.status(400).json({ message: 'Invalid organization id' });
-  }
+  const organizationId = req.organizationId;
 
   const parsed = createLocationSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -94,9 +65,6 @@ router.post('/organizations/:id/locations', (req, res) => {
 
   return Promise.resolve()
     .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return { notFound: true };
-
       const parentId = parsed.data.parent_id ?? null;
       if (parentId) {
         const parent = await db('locations')
@@ -118,7 +86,6 @@ router.post('/organizations/:id/locations', (req, res) => {
       return { location };
     })
     .then((result) => {
-      if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.badParent) return res.status(400).json({ message: 'Invalid parent location' });
       return res.status(201).json({ location: result.location });
     })

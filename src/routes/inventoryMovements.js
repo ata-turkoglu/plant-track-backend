@@ -2,8 +2,6 @@ import { Router } from 'express';
 import { z } from 'zod';
 
 import db from '../db/knex.js';
-import { getItemById } from '../models/items.js';
-import { getUnitById } from '../models/units.js';
 import {
   listMovementsByOrganization,
   createMovementEvent,
@@ -12,9 +10,10 @@ import {
   deleteDraftMovementLine,
   listBalancesByOrganization
 } from '../models/inventoryMovements.js';
-import { getNodeById } from '../models/nodes.js';
+import { loadOrganizationContext } from '../middleware/organizationContext.js';
 
 const router = Router();
+router.use('/organizations/:id', loadOrganizationContext);
 
 const lineSchema = z.object({
   item_id: z.number().int().positive(),
@@ -59,57 +58,81 @@ function normalizeLines(payload) {
   return [];
 }
 
-async function validateLineInput(organizationId, line) {
-  if (line.from_node_id === line.to_node_id) return { sameNode: true };
+async function validateLineInputs(organizationId, lines) {
+  for (const line of lines) {
+    if (line.from_node_id === line.to_node_id) return { sameNode: true };
+  }
 
-  const [fromNode, toNode, item] = await Promise.all([
-    getNodeById(line.from_node_id),
-    getNodeById(line.to_node_id),
-    getItemById(line.item_id)
+  const nodeIds = Array.from(
+    new Set(lines.flatMap((line) => [line.from_node_id, line.to_node_id]).filter((value) => Number.isFinite(value)))
+  );
+  const itemIds = Array.from(new Set(lines.map((line) => line.item_id).filter((value) => Number.isFinite(value))));
+
+  const [nodes, items] = await Promise.all([
+    db('nodes')
+      .where({ organization_id: organizationId })
+      .whereIn('id', nodeIds)
+      .select(['id']),
+    db('items')
+      .where({ organization_id: organizationId })
+      .whereIn('id', itemIds)
+      .select(['id', 'unit_id'])
   ]);
 
-  if (!fromNode || fromNode.organization_id !== organizationId) return { badFromNode: true };
-  if (!toNode || toNode.organization_id !== organizationId) return { badToNode: true };
-  if (!item || item.organization_id !== organizationId) return { badItem: true };
+  const nodeIdSet = new Set(nodes.map((row) => row.id));
+  const itemMap = new Map(items.map((row) => [row.id, row]));
 
-  const unitId = line.unit_id ?? item.unit_id;
-  const unit = await getUnitById(unitId);
-  if (!unit || unit.organization_id !== organizationId || !unit.active) return { badUnit: true };
+  const requiredUnitIds = new Set();
+  for (const line of lines) {
+    if (!nodeIdSet.has(line.from_node_id)) return { badFromNode: true };
+    if (!nodeIdSet.has(line.to_node_id)) return { badToNode: true };
 
-  return {
-    line: {
+    const item = itemMap.get(line.item_id);
+    if (!item) return { badItem: true };
+
+    requiredUnitIds.add(line.unit_id ?? item.unit_id);
+  }
+
+  const units = await db('units')
+    .where({ organization_id: organizationId, active: true })
+    .whereIn('id', Array.from(requiredUnitIds))
+    .select(['id']);
+  const unitIdSet = new Set(units.map((row) => row.id));
+
+  const validatedLines = [];
+  for (const line of lines) {
+    const item = itemMap.get(line.item_id);
+    const unitId = line.unit_id ?? item.unit_id;
+    if (!unitIdSet.has(unitId)) return { badUnit: true };
+
+    validatedLines.push({
       itemId: line.item_id,
       quantity: line.quantity,
       unitId,
       fromNodeId: line.from_node_id,
       toNodeId: line.to_node_id
-    }
-  };
+    });
+  }
+
+  return { lines: validatedLines };
 }
 
 router.get('/organizations/:id/inventory-movements', (req, res) => {
-  const organizationId = Number(req.params.id);
-  if (!Number.isFinite(organizationId)) return res.status(400).json({ message: 'Invalid organization id' });
+  const organizationId = req.organizationId;
 
   const limit = Number(req.query.limit ?? 100);
   const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 500)) : 100;
 
   return Promise.resolve()
-    .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return null;
-      return listMovementsByOrganization(organizationId, safeLimit);
-    })
+    .then(() => listMovementsByOrganization(organizationId, safeLimit))
     .then((movements) => {
-      if (!movements) return res.status(404).json({ message: 'Organization not found' });
       return res.status(200).json({ movements });
     })
     .catch(() => res.status(500).json({ message: 'Failed to fetch movements' }));
 });
 
 router.get('/organizations/:id/inventory-balances', (req, res) => {
-  const organizationId = Number(req.params.id);
-  if (!Number.isFinite(organizationId)) return res.status(400).json({ message: 'Invalid organization id' });
+  const organizationId = req.organizationId;
 
   const nodeIds = typeof req.query.node_ids === 'string'
     ? req.query.node_ids.split(',').map((v) => Number(v.trim())).filter((v) => Number.isFinite(v))
@@ -125,21 +148,15 @@ router.get('/organizations/:id/inventory-balances', (req, res) => {
   const toDate = typeof req.query.to_date === 'string' && req.query.to_date ? req.query.to_date : undefined;
 
   return Promise.resolve()
-    .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return null;
-      return listBalancesByOrganization(organizationId, { nodeIds, itemIds, statuses, fromDate, toDate });
-    })
+    .then(() => listBalancesByOrganization(organizationId, { nodeIds, itemIds, statuses, fromDate, toDate }))
     .then((balances) => {
-      if (!balances) return res.status(404).json({ message: 'Organization not found' });
       return res.status(200).json({ balances });
     })
     .catch(() => res.status(500).json({ message: 'Failed to fetch balances' }));
 });
 
 router.post('/organizations/:id/inventory-movements', (req, res) => {
-  const organizationId = Number(req.params.id);
-  if (!Number.isFinite(organizationId)) return res.status(400).json({ message: 'Invalid organization id' });
+  const organizationId = req.organizationId;
 
   const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -153,19 +170,12 @@ router.post('/organizations/:id/inventory-movements', (req, res) => {
 
   return Promise.resolve()
     .then(async () => {
-      const org = await db('organizations').where({ id: organizationId }).first(['id']);
-      if (!org) return { notFound: true };
-
-      const validatedLines = [];
-      for (const lineInput of linesInput) {
-        const valid = await validateLineInput(organizationId, lineInput);
-        if (valid.sameNode) return { sameNode: true };
-        if (valid.badFromNode) return { badFromNode: true };
-        if (valid.badToNode) return { badToNode: true };
-        if (valid.badItem) return { badItem: true };
-        if (valid.badUnit) return { badUnit: true };
-        validatedLines.push(valid.line);
-      }
+      const valid = await validateLineInputs(organizationId, linesInput);
+      if (valid.sameNode) return { sameNode: true };
+      if (valid.badFromNode) return { badFromNode: true };
+      if (valid.badToNode) return { badToNode: true };
+      if (valid.badItem) return { badItem: true };
+      if (valid.badUnit) return { badUnit: true };
 
       const eventType = parsed.data.event_type ?? 'MOVE';
       const occurredAt = parsed.data.occurred_at ? new Date(parsed.data.occurred_at) : undefined;
@@ -180,14 +190,13 @@ router.post('/organizations/:id/inventory-movements', (req, res) => {
           referenceId: parsed.data.reference_id,
           note: parsed.data.note,
           createdByUserId: null,
-          lines: validatedLines
+          lines: valid.lines
         })
       );
 
       return created;
     })
     .then((result) => {
-      if (result.notFound) return res.status(404).json({ message: 'Organization not found' });
       if (result.badFromNode) return res.status(400).json({ message: 'Invalid from node' });
       if (result.badToNode) return res.status(400).json({ message: 'Invalid to node' });
       if (result.badItem) return res.status(400).json({ message: 'Invalid item' });
@@ -199,9 +208,8 @@ router.post('/organizations/:id/inventory-movements', (req, res) => {
 });
 
 router.put('/organizations/:id/inventory-movements/:movementId', (req, res) => {
-  const organizationId = Number(req.params.id);
+  const organizationId = req.organizationId;
   const movementId = Number(req.params.movementId);
-  if (!Number.isFinite(organizationId)) return res.status(400).json({ message: 'Invalid organization id' });
   if (!Number.isFinite(movementId)) return res.status(400).json({ message: 'Invalid movement id' });
 
   const parsed = updateSchema.safeParse(req.body);
@@ -219,12 +227,13 @@ router.put('/organizations/:id/inventory-movements/:movementId', (req, res) => {
       const existing = await getMovementLineById(organizationId, movementId);
       if (!existing) return { notFoundMovement: true };
 
-      const valid = await validateLineInput(organizationId, linesInput[0]);
+      const valid = await validateLineInputs(organizationId, linesInput);
       if (valid.sameNode) return { sameNode: true };
       if (valid.badFromNode) return { badFromNode: true };
       if (valid.badToNode) return { badToNode: true };
       if (valid.badItem) return { badItem: true };
       if (valid.badUnit) return { badUnit: true };
+      const validatedLine = valid.lines[0];
 
       const eventType = parsed.data.event_type ?? existing.event_type;
       const occurredAt = parsed.data.occurred_at ? new Date(parsed.data.occurred_at) : new Date(existing.occurred_at);
@@ -238,11 +247,11 @@ router.put('/organizations/:id/inventory-movements/:movementId', (req, res) => {
           referenceType: parsed.data.reference_type,
           referenceId: parsed.data.reference_id,
           note: parsed.data.note,
-          itemId: valid.line.itemId,
-          unitId: valid.line.unitId,
-          fromNodeId: valid.line.fromNodeId,
-          toNodeId: valid.line.toNodeId,
-          quantity: valid.line.quantity
+          itemId: validatedLine.itemId,
+          unitId: validatedLine.unitId,
+          fromNodeId: validatedLine.fromNodeId,
+          toNodeId: validatedLine.toNodeId,
+          quantity: validatedLine.quantity
         })
       );
 
@@ -263,9 +272,8 @@ router.put('/organizations/:id/inventory-movements/:movementId', (req, res) => {
 });
 
 router.delete('/organizations/:id/inventory-movements/:movementId', (req, res) => {
-  const organizationId = Number(req.params.id);
+  const organizationId = req.organizationId;
   const movementId = Number(req.params.movementId);
-  if (!Number.isFinite(organizationId)) return res.status(400).json({ message: 'Invalid organization id' });
   if (!Number.isFinite(movementId)) return res.status(400).json({ message: 'Invalid movement id' });
 
   return Promise.resolve()
