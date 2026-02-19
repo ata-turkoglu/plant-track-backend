@@ -50,6 +50,20 @@ function normalizeTranslationKey(value) {
   return value.trim().toLowerCase();
 }
 
+async function upsertUnitSymbolTranslations(trx, { organizationId, symbolKey, tr, en }) {
+  if (!symbolKey) return;
+  await trx('translations')
+    .insert({
+      organization_id: organizationId,
+      namespace: 'unit_symbol',
+      entry_key: symbolKey,
+      tr,
+      en
+    })
+    .onConflict(['organization_id', 'namespace', 'entry_key'])
+    .merge({ tr, en, updated_at: trx.fn.now() });
+}
+
 router.get('/organizations/:id/units', (req, res) => {
   const organizationId = Number(req.params.id);
   if (!Number.isFinite(organizationId)) {
@@ -128,16 +142,12 @@ router.post('/organizations/:id/units', (req, res) => {
           .merge({ tr: trName, en: enName, updated_at: trx.fn.now() });
 
         if (symbolEn && symbolTr) {
-          await trx('translations')
-            .insert({
-              organization_id: organizationId,
-              namespace: 'unit_symbol',
-              entry_key: symbolKey,
-              tr: symbolTr,
-              en: symbolEn
-            })
-            .onConflict(['organization_id', 'namespace', 'entry_key'])
-            .merge({ tr: symbolTr, en: symbolEn, updated_at: trx.fn.now() });
+          await upsertUnitSymbolTranslations(trx, {
+            organizationId,
+            symbolKey,
+            tr: symbolTr,
+            en: symbolEn
+          });
         }
 
         return created;
@@ -228,16 +238,12 @@ router.patch('/units/:id', (req, res) => {
               .del();
           }
 
-          await trx('translations')
-            .insert({
-              organization_id: existing.organization_id,
-              namespace: 'unit_symbol',
-              entry_key: symbolKey,
-              tr: symbolTr,
-              en: symbolEn
-            })
-            .onConflict(['organization_id', 'namespace', 'entry_key'])
-            .merge({ tr: symbolTr, en: symbolEn, updated_at: trx.fn.now() });
+          await upsertUnitSymbolTranslations(trx, {
+            organizationId: existing.organization_id,
+            symbolKey,
+            tr: symbolTr,
+            en: symbolEn
+          });
         } else {
           const staleKeys = [oldCode, code, oldSymbolKey].filter((value, index, arr) => value && arr.indexOf(value) === index);
           if (staleKeys.length > 0) {
