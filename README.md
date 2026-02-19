@@ -1,38 +1,53 @@
-# Inventory Nodes
+# Backend Agent Guide
 
-`nodes` is the unified stock-endpoint table for inventory ledger movements.
+This file is for AI agents working in backend scope (`backend/`).
 
-## Why it exists
+## First Read (Required)
 
-- Decouples inventory movements from warehouse-only flows.
-- Lets a movement point from any stock node to any stock node.
-- Works with the new ledger source of truth:
+- `docs/db/SCHEMA.md`
+
+Before backend changes, read schema doc first and align route/model behavior with it.
+
+## Core Domain
+
+- Inventory source of truth:
   - `inventory_movement_events` (header)
   - `inventory_movement_lines` (lines)
+- Unified stock endpoints:
+  - `nodes` table (`WAREHOUSE`, `LOCATION`, `SUPPLIER`, `CUSTOMER`, `ASSET`, `VIRTUAL`)
+- Balances:
+  - computed from `POSTED` events only
+  - `SUM(incoming) - SUM(outgoing)` by node/item
 
-## Current node types
+## Main Backend Paths
 
-- `WAREHOUSE`
-- `LOCATION`
-- `SUPPLIER`
-- `CUSTOMER`
-- `ASSET`
-- `VIRTUAL`
+- `src/index.js`: route registration
+- `src/routes/`: API handlers
+- `src/models/`: DB/domain operations
+- `migrations/000000_init.cjs`: current squashed migration
 
-## How movement ledger works
+## Recent Backend Notes (Do Not Miss)
 
-- Event header carries: `event_type`, `status`, `occurred_at`, optional reference fields.
-- Every line stores `from_node_id`, `to_node_id`, `item_id`, `unit_id`, `quantity > 0`.
-- Balance is computed as: `SUM(incoming to node) - SUM(outgoing from node)`.
-- Balances are computed from `inventory_movement_lines` joined with `inventory_movement_events` where status is `POSTED`.
-- `POSTED` rows are immutable; corrections should be new reversing entries.
+- `items`:
+  - `items.type` is removed; use `warehouse_type_id`.
+  - item payloads include `brand`, `model`, `size_spec`, `size_unit_id`.
+- `translations`:
+  - model is single-row per key with columns `tr` and `en` (not locale/value rows).
+  - namespaces include at least `warehouse_type`, `unit`, `unit_symbol`.
+- `units`:
+  - unit translation and symbol translation records must stay in sync with unit create/update flows.
+  - `unit_symbol` translation key now uses unit code mapping (not raw symbol key).
+- `suppliers/customers`:
+  - corresponding `nodes` records must be created/updated/deleted together in transactional flow.
+- `inventory movements`:
+  - use event + lines model, node ids are required for movements.
+  - keep `POSTED` immutability rule in mind for corrections.
 
-## Adding a new node type
+## Change Checklist
 
-1. Extend `nodes_node_type_check` in migration flow.
-2. Expose/filter type from `GET /api/organizations/:id/nodes`.
-3. Update frontend selector grouping in `frontend/src/pages/InventoryMovementsPage.tsx`.
+After backend changes:
 
-## Schema doc
-
-Current schema reference: `docs/db/SCHEMA.md`.
+1. Update route + model together for domain consistency.
+2. Verify migrations/schema assumptions against `docs/db/SCHEMA.md`.
+3. If node-related data changes, validate `/api/organizations/:id/nodes` compatibility.
+4. If API contract changes, reflect required frontend impact.
