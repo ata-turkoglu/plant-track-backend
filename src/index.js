@@ -15,6 +15,8 @@ import nodesRoutes from './routes/nodes.js';
 import suppliersRoutes from './routes/suppliers.js';
 import customersRoutes from './routes/customers.js';
 import translationsRoutes from './routes/translations.js';
+import assetsRoutes from './routes/assets.js';
+import assetTypesRoutes from './routes/assetTypes.js';
 
 const app = express();
 const port = Number(process.env.PORT ?? 3001);
@@ -36,6 +38,8 @@ app.use('/api', nodesRoutes);
 app.use('/api', suppliersRoutes);
 app.use('/api', customersRoutes);
 app.use('/api', translationsRoutes);
+app.use('/api', assetsRoutes);
+app.use('/api', assetTypesRoutes);
 
 app.use((_req, res) => {
   res.status(404).json({ message: 'Not found' });
