@@ -58,13 +58,27 @@ function normalizeUnitId(value) {
   return n;
 }
 
+function normalizeAssetImageUrl(value) {
+  if (value == null) return null;
+  if (typeof value !== 'string') return undefined;
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith('data:image/')) return trimmed;
+  if (lower.startsWith('http://') || lower.startsWith('https://')) return trimmed;
+
+  return undefined;
+}
+
 function mapAssetTypeFieldsToSchemaRows(rows) {
   return rows
     .filter((row) => row.active !== false)
     .map((row) => ({
       key: (row.name ?? '').trim(),
       label: (row.label ?? '').trim() || (row.name ?? '').trim(),
-      type: normalizeFieldType(row.input_type),
+      type: normalizeFieldType(row.data_type),
       required: Boolean(row.required),
       unitId: normalizeUnitId(row.unit_id)
     }))
@@ -204,6 +218,7 @@ const createSchema = z.object({
   asset_type_id: z.number().int().positive().optional().nullable(),
   code: z.string().min(1).max(64).optional().nullable(),
   name: z.string().min(1).max(255),
+  image_url: z.string().max(4_000_000).optional().nullable(),
   active: z.boolean().optional(),
   attributes_json: z.unknown().optional().nullable()
 });
@@ -217,6 +232,8 @@ router.post('/organizations/:id/assets', (req, res) => {
   return Promise.resolve()
     .then(async () => {
       let attributesJson = parsed.data.attributes_json ?? null;
+      const imageUrl = normalizeAssetImageUrl(parsed.data.image_url);
+      if (imageUrl === undefined) return { invalidImage: true };
 
       const location = await db('locations').where({ id: parsed.data.location_id, organization_id: organizationId }).first(['id']);
       if (!location) return { notFoundLocation: true };
@@ -244,6 +261,7 @@ router.post('/organizations/:id/assets', (req, res) => {
           assetTypeId: parsed.data.asset_type_id ?? null,
           code: parsed.data.code ?? null,
           name: parsed.data.name,
+          imageUrl,
           active: parsed.data.active,
           attributesJson
         });
@@ -275,6 +293,7 @@ router.post('/organizations/:id/assets', (req, res) => {
       return { asset };
     })
     .then((result) => {
+      if (result.invalidImage) return res.status(400).json({ message: 'Invalid image_url. Use http(s) URL or data:image payload.' });
       if (result.notFoundLocation) return res.status(404).json({ message: 'Location not found' });
       if (result.notFoundParent) return res.status(404).json({ message: 'Parent asset not found' });
       if (result.notFoundType) return res.status(404).json({ message: 'Asset type not found' });
@@ -289,6 +308,7 @@ const updateSchema = z.object({
   asset_type_id: z.number().int().positive().optional().nullable(),
   code: z.string().min(1).max(64).optional().nullable(),
   name: z.string().min(1).max(255),
+  image_url: z.string().max(4_000_000).optional().nullable(),
   active: z.boolean().optional(),
   attributes_json: z.unknown().optional().nullable()
 });
@@ -305,8 +325,14 @@ router.put('/organizations/:id/assets/:assetId', (req, res) => {
     .then(async () => {
       let attributesJson = parsed.data.attributes_json ?? null;
 
-      const existing = await db('assets').where({ id: assetId, organization_id: organizationId }).first(['id', 'location_id']);
+      const existing = await db('assets')
+        .where({ id: assetId, organization_id: organizationId })
+        .first(['id', 'location_id', 'image_url']);
       if (!existing) return { notFound: true };
+
+      const imageUrlInput = normalizeAssetImageUrl(parsed.data.image_url);
+      if (imageUrlInput === undefined) return { invalidImage: true };
+      const imageUrl = parsed.data.image_url === undefined ? (existing.image_url ?? null) : imageUrlInput;
 
       if (parsed.data.parent_asset_id) {
         if (parsed.data.parent_asset_id === assetId) return { selfParent: true };
@@ -332,6 +358,7 @@ router.put('/organizations/:id/assets/:assetId', (req, res) => {
           assetTypeId: parsed.data.asset_type_id ?? null,
           code: parsed.data.code ?? null,
           name: parsed.data.name,
+          imageUrl,
           active: parsed.data.active,
           attributesJson
         });
@@ -354,6 +381,7 @@ router.put('/organizations/:id/assets/:assetId', (req, res) => {
       return { asset };
     })
     .then((result) => {
+      if (result.invalidImage) return res.status(400).json({ message: 'Invalid image_url. Use http(s) URL or data:image payload.' });
       if (result.notFound) return res.status(404).json({ message: 'Asset not found' });
       if (result.selfParent) return res.status(400).json({ message: 'Asset cannot be its own parent' });
       if (result.notFoundParent) return res.status(404).json({ message: 'Parent asset not found' });
@@ -606,10 +634,14 @@ router.post('/organizations/:id/assets/:assetId/bom', (req, res) => {
       const asset = await db('assets').where({ id: assetId, organization_id: organizationId }).first(['id']);
       if (!asset) return { notFound: true };
 
-      const item = await db('items')
-        .where({ id: parsed.data.item_id, organization_id: organizationId })
-        .first(['id', 'unit_id']);
+      const item = await db('items as i')
+        .leftJoin({ wt: 'warehouse_types' }, function joinWarehouseType() {
+          this.on('wt.id', '=', 'i.warehouse_type_id').andOn('wt.organization_id', '=', 'i.organization_id');
+        })
+        .where({ 'i.id': parsed.data.item_id, 'i.organization_id': organizationId })
+        .first(['i.id', 'i.unit_id', 'wt.code as warehouse_type_code']);
       if (!item) return { notFoundItem: true };
+      if (String(item.warehouse_type_code ?? '').toUpperCase() !== 'SPARE_PART') return { invalidItemType: true };
 
       const conflict = await db('asset_bom_lines')
         .where({ organization_id: organizationId, asset_id: assetId, item_id: parsed.data.item_id })
@@ -634,6 +666,7 @@ router.post('/organizations/:id/assets/:assetId/bom', (req, res) => {
     .then((result) => {
       if (result.notFound) return res.status(404).json({ message: 'Asset not found' });
       if (result.notFoundItem) return res.status(404).json({ message: 'Item not found' });
+      if (result.invalidItemType) return res.status(400).json({ message: 'Only spare part items can be added to BOM' });
       if (result.conflict) return res.status(409).json({ message: 'Item already exists in BOM' });
       return res.status(201).json({ line: result.line });
     })

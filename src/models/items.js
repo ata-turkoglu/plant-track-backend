@@ -1,7 +1,7 @@
 import db from '../db/knex.js';
 
-export async function listItemsByOrganization(organizationId) {
-  return db('items')
+export async function listItemsByOrganization(organizationId, { active, warehouseTypeId, warehouseTypeCode } = {}) {
+  const query = db('items')
     .where({ organization_id: organizationId })
     .orderBy([{ column: 'active', order: 'desc' }, { column: 'name', order: 'asc' }])
     .select([
@@ -17,6 +17,26 @@ export async function listItemsByOrganization(organizationId) {
       'unit_id',
       'active'
     ]);
+
+  if (typeof active === 'boolean') query.andWhere({ active });
+
+  const parsedWarehouseTypeId = Number(warehouseTypeId);
+  if (Number.isFinite(parsedWarehouseTypeId) && parsedWarehouseTypeId > 0) {
+    query.andWhere({ warehouse_type_id: parsedWarehouseTypeId });
+  }
+
+  const warehouseTypeCodeText = typeof warehouseTypeCode === 'string' ? warehouseTypeCode.trim() : '';
+  if (warehouseTypeCodeText) {
+    query.whereIn(
+      'warehouse_type_id',
+      db('warehouse_types')
+        .where({ organization_id: organizationId })
+        .whereRaw('lower(code) = lower(?)', [warehouseTypeCodeText])
+        .select(['id'])
+    );
+  }
+
+  return query;
 }
 
 export async function getItemById(id) {

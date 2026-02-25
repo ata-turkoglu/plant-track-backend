@@ -26,9 +26,14 @@ router.get('/organizations/:id/asset-types', (req, res) => {
     .catch(() => res.status(500).json({ message: 'Failed to fetch asset types' }));
 });
 
-const INPUT_TYPES = ['text', 'number', 'boolean', 'date'];
+const FIELD_DATA_TYPES = ['text', 'number', 'boolean', 'date'];
+const DEFAULT_ASSET_TYPE_FIELDS = [
+  { name: 'marka', label: 'Marka', aliases: ['brand'] },
+  { name: 'model', label: 'Model' },
+  { name: 'seri_no', label: 'Seri No', aliases: ['serial_no'] }
+];
 
-function normalizeInputType(value) {
+function normalizeDataType(value) {
   if (value === 'text' || value === 'number' || value === 'boolean' || value === 'date') return value;
   return 'text';
 }
@@ -82,13 +87,14 @@ function normalizeFields(rows) {
     const required = Boolean(raw.required);
     const unitId = normalizeUnitId(raw.unit_id);
     const active = raw.active == null ? true : Boolean(raw.active);
+    const rawDataType = raw.data_type;
     const hasAny = Boolean(
       rawName ||
         label ||
         required ||
         unitId != null ||
         active === false ||
-        (typeof raw.input_type === 'string' && raw.input_type !== 'text')
+        (typeof rawDataType === 'string' && rawDataType !== 'text')
     );
 
     if (!hasAny) continue;
@@ -100,7 +106,7 @@ function normalizeFields(rows) {
     normalized.push({
       name,
       label,
-      inputType: normalizeInputType(raw.input_type),
+      dataType: normalizeDataType(rawDataType),
       required,
       unitId,
       sortOrder: idx,
@@ -118,6 +124,34 @@ function normalizeFields(rows) {
   return { ok: true, value: normalized };
 }
 
+function ensureDefaultAssetTypeFields(rows) {
+  const output = [...rows];
+  const seen = new Set(output.map((row) => row.name.toLowerCase()));
+  let sortOrder = output.reduce((max, row) => {
+    if (!Number.isFinite(row.sortOrder)) return max;
+    return Math.max(max, row.sortOrder);
+  }, -1);
+
+  for (const defaultField of DEFAULT_ASSET_TYPE_FIELDS) {
+    const aliases = Array.isArray(defaultField.aliases) ? defaultField.aliases : [];
+    const allNames = [defaultField.name, ...aliases];
+    if (allNames.some((name) => seen.has(String(name).toLowerCase()))) continue;
+    sortOrder += 1;
+    output.push({
+      name: defaultField.name,
+      label: defaultField.label,
+      dataType: 'text',
+      required: false,
+      unitId: null,
+      sortOrder,
+      active: true
+    });
+    for (const name of allNames) seen.add(String(name).toLowerCase());
+  }
+
+  return output;
+}
+
 async function validateUnitIds(organizationId, fields) {
   const unitIds = [...new Set(fields.map((row) => row.unitId).filter((id) => id != null))];
   if (unitIds.length === 0) return true;
@@ -129,7 +163,7 @@ async function validateUnitIds(organizationId, fields) {
 const fieldSchema = z.object({
   name: z.string().max(128).optional().nullable(),
   label: z.string().max(255).optional().nullable(),
-  input_type: z.enum(INPUT_TYPES).optional().nullable(),
+  data_type: z.enum(FIELD_DATA_TYPES).optional().nullable(),
   required: z.boolean().optional(),
   unit_id: z.number().int().positive().optional().nullable(),
   active: z.boolean().optional()
@@ -152,8 +186,9 @@ router.post('/organizations/:id/asset-types', (req, res) => {
     .then(async () => {
       const normalizedFields = normalizeFields(parsed.data.fields ?? []);
       if (!normalizedFields.ok) return { invalidFields: normalizedFields.message };
+      const fieldsWithDefaults = ensureDefaultAssetTypeFields(normalizedFields.value);
 
-      const validUnitIds = await validateUnitIds(organizationId, normalizedFields.value);
+      const validUnitIds = await validateUnitIds(organizationId, fieldsWithDefaults);
       if (!validUnitIds) return { invalidUnit: true };
 
       const assetType = await db.transaction((trx) =>
@@ -162,7 +197,7 @@ router.post('/organizations/:id/asset-types', (req, res) => {
           code: parsed.data.code,
           name: parsed.data.name,
           active: parsed.data.active,
-          fields: normalizedFields.value
+          fields: fieldsWithDefaults
         })
       );
 

@@ -14,6 +14,7 @@ export async function listAssetsByOrganization(
       'asset_type_id',
       'code',
       'name',
+      'image_url',
       'active',
       'current_state',
       'running_since',
@@ -45,6 +46,7 @@ export async function getAssetById(organizationId, assetId) {
       'asset_type_id',
       'code',
       'name',
+      'image_url',
       'active',
       'current_state',
       'running_since',
@@ -57,7 +59,7 @@ export async function getAssetById(organizationId, assetId) {
 
 export async function createAsset(
   trx,
-  { organizationId, locationId, parentAssetId, assetTypeId, code, name, active, attributesJson }
+  { organizationId, locationId, parentAssetId, assetTypeId, code, name, imageUrl, active, attributesJson }
 ) {
   const rows = await trx('assets')
     .insert({
@@ -67,6 +69,7 @@ export async function createAsset(
       asset_type_id: assetTypeId ?? null,
       code: code ?? null,
       name,
+      image_url: imageUrl ?? null,
       active: active ?? true,
       attributes_json: attributesJson ?? null,
       current_state: 'STOPPED',
@@ -81,6 +84,7 @@ export async function createAsset(
       'asset_type_id',
       'code',
       'name',
+      'image_url',
       'active',
       'current_state',
       'running_since',
@@ -93,7 +97,7 @@ export async function createAsset(
   return rows[0];
 }
 
-export async function updateAsset(trx, { organizationId, assetId, parentAssetId, assetTypeId, code, name, active, attributesJson }) {
+export async function updateAsset(trx, { organizationId, assetId, parentAssetId, assetTypeId, code, name, imageUrl, active, attributesJson }) {
   const rows = await trx('assets')
     .where({ id: assetId, organization_id: organizationId })
     .update({
@@ -101,6 +105,7 @@ export async function updateAsset(trx, { organizationId, assetId, parentAssetId,
       asset_type_id: assetTypeId ?? null,
       code: code ?? null,
       name,
+      image_url: imageUrl ?? null,
       active: active ?? true,
       attributes_json: attributesJson ?? null,
       updated_at: trx.fn.now()
@@ -113,6 +118,7 @@ export async function updateAsset(trx, { organizationId, assetId, parentAssetId,
       'asset_type_id',
       'code',
       'name',
+      'image_url',
       'active',
       'current_state',
       'running_since',
@@ -149,6 +155,7 @@ export async function updateAssetLocation(trx, { organizationId, assetId, toLoca
       'asset_type_id',
       'code',
       'name',
+      'image_url',
       'active',
       'current_state',
       'running_since',
@@ -185,6 +192,7 @@ export async function updateAssetState(trx, { organizationId, assetId, currentSt
       'asset_type_id',
       'code',
       'name',
+      'image_url',
       'active',
       'current_state',
       'running_since',
@@ -258,4 +266,3 @@ export async function listAssetEvents(organizationId, assetId, { limit = 200 } =
     .orderBy([{ column: 'occurred_at', order: 'desc' }, { column: 'id', order: 'desc' }])
     .limit(safeLimit);
 }
-

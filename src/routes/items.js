@@ -12,9 +12,22 @@ router.use('/organizations/:id', loadOrganizationContext);
 
 router.get('/organizations/:id/items', (req, res) => {
   const organizationId = req.organizationId;
+  const activeText = typeof req.query.active === 'string' ? req.query.active.trim().toLowerCase() : '';
+  if (activeText && activeText !== 'true' && activeText !== 'false') {
+    return res.status(400).json({ message: 'Invalid active filter. Use true or false.' });
+  }
+  const active = activeText ? activeText === 'true' : undefined;
+
+  const warehouseTypeIdText = typeof req.query.warehouseTypeId === 'string' ? req.query.warehouseTypeId.trim() : '';
+  const warehouseTypeId = warehouseTypeIdText ? Number(warehouseTypeIdText) : undefined;
+  if (warehouseTypeIdText && (!Number.isFinite(warehouseTypeId) || warehouseTypeId <= 0)) {
+    return res.status(400).json({ message: 'Invalid warehouseTypeId filter' });
+  }
+
+  const warehouseTypeCode = typeof req.query.warehouseTypeCode === 'string' ? req.query.warehouseTypeCode.trim() : undefined;
 
   return Promise.resolve()
-    .then(() => listItemsByOrganization(organizationId))
+    .then(() => listItemsByOrganization(organizationId, { active, warehouseTypeId, warehouseTypeCode }))
     .then((items) => {
       return res.status(200).json({ items });
     })
