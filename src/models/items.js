@@ -107,9 +107,6 @@ export async function updateItem(
 }
 
 export async function setItemActive(trx, { organizationId, itemId, active }) {
-  const existing = await trx('items').where({ id: itemId, organization_id: organizationId }).first(['id', 'item_group_id']);
-  if (!existing) return null;
-
   const rows = await trx('items')
     .where({ id: itemId, organization_id: organizationId })
     .update({ active, updated_at: trx.fn.now() })
@@ -117,10 +114,6 @@ export async function setItemActive(trx, { organizationId, itemId, active }) {
 
   const updated = rows[0] ?? null;
   if (!updated) return null;
-
-  await trx('item_groups')
-    .where({ id: existing.item_group_id, organization_id: organizationId })
-    .update({ active, updated_at: trx.fn.now() });
 
   return updated;
 }

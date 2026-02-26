@@ -111,6 +111,10 @@ export async function getAssetBomRollup(organizationId, rootAssetId) {
       ig.code as item_group_code,
       ig.name as item_group_name,
       ig.size_spec as item_group_size_spec,
+      ig.size_unit_id as item_group_size_unit_id,
+      su.code as item_group_size_unit_code,
+      su.name as item_group_size_unit_name,
+      su.symbol as item_group_size_unit_symbol,
       u.code as unit_code,
       u.name as unit_name,
       u.symbol as unit_symbol
@@ -118,6 +122,7 @@ export async function getAssetBomRollup(organizationId, rootAssetId) {
     join asset_tree t on t.id = abl.asset_id
     join item_groups ig on ig.id = abl.item_group_id
     join units u on u.id = abl.unit_id
+    left join units su on su.id = ig.size_unit_id
     where abl.organization_id = ?
     group by
       abl.item_group_id,
@@ -125,6 +130,10 @@ export async function getAssetBomRollup(organizationId, rootAssetId) {
       ig.code,
       ig.name,
       ig.size_spec,
+      ig.size_unit_id,
+      su.code,
+      su.name,
+      su.symbol,
       u.code,
       u.name,
       u.symbol

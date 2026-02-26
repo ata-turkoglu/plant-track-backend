@@ -24,7 +24,15 @@ const port = Number(process.env.PORT ?? 3001);
 
 app.use(cors());
 app.use(morgan('dev'));
-app.use(express.json());
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT ?? '12mb' }));
+app.use(express.urlencoded({ extended: true, limit: process.env.JSON_BODY_LIMIT ?? '12mb' }));
+
+app.use((err, _req, res, next) => {
+  if (err && (err.type === 'entity.too.large' || err.name === 'PayloadTooLargeError')) {
+    return res.status(413).json({ message: 'Request entity too large' });
+  }
+  return next(err);
+});
 
 app.use('/api', healthRoutes);
 app.use('/api', authRoutes);

@@ -10,6 +10,8 @@ import { loadOrganizationContext } from '../middleware/organizationContext.js';
 const router = Router();
 router.use('/organizations/:id', loadOrganizationContext);
 
+const WAREHOUSE_TYPES_REQUIRING_ITEM_GROUP = new Set(['SPARE_PART', 'RAW_MATERIAL']);
+
 router.get('/organizations/:id/items', (req, res) => {
   const organizationId = req.organizationId;
   const activeText = typeof req.query.active === 'string' ? req.query.active.trim().toLowerCase() : '';
@@ -36,6 +38,7 @@ router.get('/organizations/:id/items', (req, res) => {
 
 const createSchema = z.object({
   warehouse_type_id: z.number().int().positive(),
+  item_group_id: z.number().int().positive().optional().nullable(),
   code: z.string().min(1).max(64),
   name: z.string().min(1).max(255),
   brand: z.string().max(255).optional().nullable(),
@@ -63,6 +66,45 @@ router.post('/organizations/:id/items', (req, res) => {
         .first(['id']);
       if (existing) return { conflict: true };
 
+      const wt = await getWarehouseTypeById(parsed.data.warehouse_type_id);
+      if (!wt || wt.organization_id !== organizationId) return { badWarehouseType: true };
+
+      const wtCode = String(wt.code ?? '').toUpperCase();
+      const requiresGroup = WAREHOUSE_TYPES_REQUIRING_ITEM_GROUP.has(wtCode);
+      const requestedGroupId = parsed.data.item_group_id ?? null;
+
+      if (requiresGroup && !requestedGroupId) {
+        return { itemGroupRequired: true };
+      }
+
+      if (requestedGroupId) {
+        const group = await db('item_groups')
+          .where({ id: requestedGroupId, organization_id: organizationId })
+          .first(['id', 'warehouse_type_id', 'amount_unit_id', 'active']);
+        if (!group) return { badItemGroup: true };
+        if (!group.active) return { badItemGroup: true };
+        if (group.warehouse_type_id !== wt.id) return { badItemGroup: true };
+
+        const unit = await getUnitById(group.amount_unit_id);
+        if (!unit || unit.organization_id !== organizationId || !unit.active) return { badUnit: true };
+
+        const item = await db.transaction(async (trx) =>
+          createItem(trx, {
+            organizationId,
+            itemGroupId: group.id,
+            warehouseTypeId: wt.id,
+            code: parsed.data.code,
+            name: parsed.data.name,
+            brand: parsed.data.brand?.trim() || null,
+            model: parsed.data.model?.trim() || null,
+            unitId: unit.id,
+            active: parsed.data.active
+          })
+        );
+
+        return { item };
+      }
+
       const unit = await getUnitById(parsed.data.unit_id);
       if (!unit || unit.organization_id !== organizationId || !unit.active) return { badUnit: true };
 
@@ -70,9 +112,6 @@ router.post('/organizations/:id/items', (req, res) => {
         const sizeUnit = await getUnitById(parsed.data.size_unit_id);
         if (!sizeUnit || sizeUnit.organization_id !== organizationId || !sizeUnit.active) return { badSizeUnit: true };
       }
-
-      const wt = await getWarehouseTypeById(parsed.data.warehouse_type_id);
-      if (!wt || wt.organization_id !== organizationId) return { badWarehouseType: true };
 
       const item = await db.transaction(async (trx) => {
         const groupRows = await trx('item_groups')
@@ -108,9 +147,11 @@ router.post('/organizations/:id/items', (req, res) => {
     })
     .then((result) => {
       if (result.conflict) return res.status(409).json({ message: 'Item code already exists' });
+      if (result.itemGroupRequired) return res.status(400).json({ message: 'item_group_id is required for this warehouse type' });
       if (result.badUnit) return res.status(400).json({ message: 'Invalid unit' });
       if (result.badSizeUnit) return res.status(400).json({ message: 'Invalid size unit' });
       if (result.badWarehouseType) return res.status(400).json({ message: 'Invalid warehouse type' });
+      if (result.badItemGroup) return res.status(400).json({ message: 'Invalid item group' });
       return res.status(201).json({ item: result.item });
     })
     .catch(() => res.status(500).json({ message: 'Failed to create item' }));
@@ -154,38 +195,54 @@ router.put('/organizations/:id/items/:itemId', (req, res) => {
         .first(['id']);
       if (conflict) return { conflict: true };
 
-      const unit = await getUnitById(parsed.data.unit_id);
+      const wt = await getWarehouseTypeById(existingItem.warehouse_type_id);
+      if (!wt || wt.organization_id !== organizationId) return { badWarehouseType: true };
+      const wtCode = String(wt.code ?? '').toUpperCase();
+      const isGroupedType = WAREHOUSE_TYPES_REQUIRING_ITEM_GROUP.has(wtCode);
+
+      const isGroupChange = Boolean(parsed.data.item_group_id) && parsed.data.item_group_id !== existingItem.item_group_id;
+      const nextItemGroupId = parsed.data.item_group_id ?? existingItem.item_group_id;
+
+      const group = await db('item_groups')
+        .where({ id: nextItemGroupId, organization_id: organizationId })
+        .first(['id', 'warehouse_type_id', 'amount_unit_id', 'active', 'code', 'name', 'size_spec', 'size_unit_id']);
+      if (!group) return { badItemGroup: true };
+      if (isGroupChange && !group.active) return { badItemGroup: true };
+      if (group.warehouse_type_id !== existingItem.warehouse_type_id) return { badItemGroup: true };
+
+      // Grouped types: unit is owned by item group (shared).
+      // Non-grouped types: unit stays item-scoped, but if item_group is 1:1 we also keep item_group unit in sync.
+      const resolvedUnitId = isGroupedType || isGroupChange ? group.amount_unit_id : parsed.data.unit_id;
+      const unit = await getUnitById(resolvedUnitId);
       if (!unit || unit.organization_id !== organizationId || !unit.active) return { badUnit: true };
 
-      if (parsed.data.size_unit_id) {
+      const shouldSyncGroupFields = !isGroupedType && !isGroupChange;
+      if (shouldSyncGroupFields && parsed.data.size_unit_id) {
         const sizeUnit = await getUnitById(parsed.data.size_unit_id);
         if (!sizeUnit || sizeUnit.organization_id !== organizationId || !sizeUnit.active) return { badSizeUnit: true };
       }
 
-      if (parsed.data.item_group_id) {
-        const group = await db('item_groups')
-          .where({ id: parsed.data.item_group_id, organization_id: organizationId, active: true })
-          .first(['id', 'warehouse_type_id']);
-        if (!group) return { badItemGroup: true };
-        if (group.warehouse_type_id !== existingItem.warehouse_type_id) return { badItemGroup: true };
-      }
-
       const item = await db.transaction(async (trx) => {
-        const nextItemGroupId = parsed.data.item_group_id ?? existingItem.item_group_id;
-        const isGroupChange = Boolean(parsed.data.item_group_id) && parsed.data.item_group_id !== existingItem.item_group_id;
+        if (shouldSyncGroupFields) {
+          const usageRows = await trx('items')
+            .where({ organization_id: organizationId, item_group_id: existingItem.item_group_id })
+            .count('* as count');
+          const usageCount = Number(usageRows?.[0]?.count ?? 0);
+          const isGroupShared = usageCount > 1;
 
-        if (!isGroupChange) {
-          await trx('item_groups')
-            .where({ id: existingItem.item_group_id, organization_id: organizationId })
-            .update({
-              code: parsed.data.code,
-              name: parsed.data.name,
-              amount_unit_id: unit.id,
-              size_spec: parsed.data.size_spec?.trim() || null,
-              size_unit_id: parsed.data.size_unit_id ?? null,
-              active: parsed.data.active ?? true,
-              updated_at: trx.fn.now()
-            });
+          if (!isGroupShared) {
+            await trx('item_groups')
+              .where({ id: existingItem.item_group_id, organization_id: organizationId })
+              .update({
+                code: parsed.data.code,
+                name: parsed.data.name,
+                amount_unit_id: unit.id,
+                size_spec: parsed.data.size_spec?.trim() || null,
+                size_unit_id: parsed.data.size_unit_id ?? null,
+                active: parsed.data.active ?? true,
+                updated_at: trx.fn.now()
+              });
+          }
         }
 
         return updateItem(trx, {
@@ -208,6 +265,7 @@ router.put('/organizations/:id/items/:itemId', (req, res) => {
       if (result.conflict) return res.status(409).json({ message: 'Item code already exists' });
       if (result.badUnit) return res.status(400).json({ message: 'Invalid unit' });
       if (result.badSizeUnit) return res.status(400).json({ message: 'Invalid size unit' });
+      if (result.badWarehouseType) return res.status(400).json({ message: 'Invalid warehouse type' });
       if (result.badItemGroup) return res.status(400).json({ message: 'Invalid item group' });
       if (!result.item) return res.status(404).json({ message: 'Item not found' });
       return res.status(200).json({ item: result.item });
