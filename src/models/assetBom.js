@@ -3,40 +3,42 @@ import db from '../db/knex.js';
 export async function listAssetBomLines(organizationId, assetId) {
   return db('asset_bom_lines as abl')
     .where({ 'abl.organization_id': organizationId, 'abl.asset_id': assetId })
-    .join('items as i', 'abl.item_id', 'i.id')
+    .join('item_groups as ig', 'abl.item_group_id', 'ig.id')
     .join('units as u', 'abl.unit_id', 'u.id')
+    .leftJoin({ su: 'units' }, 'ig.size_unit_id', 'su.id')
     .select([
       'abl.id',
       'abl.organization_id',
       'abl.asset_id',
-      'abl.item_id',
+      'abl.item_group_id',
       'abl.unit_id',
       'abl.quantity',
-      'abl.preferred',
       'abl.note',
       'abl.meta_json',
       'abl.created_at',
       'abl.updated_at',
-      'i.code as item_code',
-      'i.name as item_name',
-      'i.brand as item_brand',
-      'i.model as item_model',
+      'ig.code as item_group_code',
+      'ig.name as item_group_name',
+      'ig.size_spec as item_group_size_spec',
+      'ig.size_unit_id as item_group_size_unit_id',
+      'su.code as item_group_size_unit_code',
+      'su.name as item_group_size_unit_name',
+      'su.symbol as item_group_size_unit_symbol',
       'u.code as unit_code',
       'u.name as unit_name',
       'u.symbol as unit_symbol'
     ])
-    .orderBy([{ column: 'i.name', order: 'asc' }, { column: 'abl.id', order: 'asc' }]);
+    .orderBy([{ column: 'ig.name', order: 'asc' }, { column: 'abl.id', order: 'asc' }]);
 }
 
-export async function createAssetBomLine(trx, { organizationId, assetId, itemId, unitId, quantity, preferred, note, metaJson }) {
+export async function createAssetBomLine(trx, { organizationId, assetId, itemGroupId, unitId, quantity, note, metaJson }) {
   const rows = await trx('asset_bom_lines')
     .insert({
       organization_id: organizationId,
       asset_id: assetId,
-      item_id: itemId,
+      item_group_id: itemGroupId,
       unit_id: unitId,
       quantity,
-      preferred: preferred ?? true,
       note: note ?? null,
       meta_json: metaJson ?? null
     })
@@ -44,10 +46,9 @@ export async function createAssetBomLine(trx, { organizationId, assetId, itemId,
       'id',
       'organization_id',
       'asset_id',
-      'item_id',
+      'item_group_id',
       'unit_id',
       'quantity',
-      'preferred',
       'note',
       'meta_json',
       'created_at',
@@ -56,12 +57,11 @@ export async function createAssetBomLine(trx, { organizationId, assetId, itemId,
   return rows[0];
 }
 
-export async function updateAssetBomLine(trx, { organizationId, assetId, lineId, quantity, preferred, note, metaJson }) {
+export async function updateAssetBomLine(trx, { organizationId, assetId, lineId, quantity, note, metaJson }) {
   const rows = await trx('asset_bom_lines')
     .where({ id: lineId, organization_id: organizationId, asset_id: assetId })
     .update({
       quantity,
-      preferred: preferred ?? true,
       note: note ?? null,
       meta_json: metaJson ?? null,
       updated_at: trx.fn.now()
@@ -70,10 +70,9 @@ export async function updateAssetBomLine(trx, { organizationId, assetId, lineId,
       'id',
       'organization_id',
       'asset_id',
-      'item_id',
+      'item_group_id',
       'unit_id',
       'quantity',
-      'preferred',
       'note',
       'meta_json',
       'created_at',
@@ -106,34 +105,31 @@ export async function getAssetBomRollup(organizationId, rootAssetId) {
       where child.organization_id = ?
     )
     select
-      abl.item_id,
+      abl.item_group_id,
       abl.unit_id,
       sum(abl.quantity)::numeric(18,3) as required_quantity,
-      i.code as item_code,
-      i.name as item_name,
-      i.brand as item_brand,
-      i.model as item_model,
+      ig.code as item_group_code,
+      ig.name as item_group_name,
+      ig.size_spec as item_group_size_spec,
       u.code as unit_code,
       u.name as unit_name,
       u.symbol as unit_symbol
     from asset_bom_lines abl
     join asset_tree t on t.id = abl.asset_id
-    join items i on i.id = abl.item_id
+    join item_groups ig on ig.id = abl.item_group_id
     join units u on u.id = abl.unit_id
     where abl.organization_id = ?
     group by
-      abl.item_id,
+      abl.item_group_id,
       abl.unit_id,
-      i.code,
-      i.name,
-      i.brand,
-      i.model,
+      ig.code,
+      ig.name,
+      ig.size_spec,
       u.code,
       u.name,
       u.symbol
-    order by i.name asc
+    order by ig.name asc
     `,
     [organizationId, rootAssetId, organizationId, organizationId]
   );
 }
-

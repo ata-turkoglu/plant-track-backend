@@ -5,7 +5,7 @@ export async function listMovementsByOrganization(organizationId, limit = 100) {
     .from({ l: 'inventory_movement_lines' })
     .join({ e: 'inventory_movement_events' }, 'e.id', 'l.event_id')
     .leftJoin({ i: 'items' }, 'i.id', 'l.item_id')
-    .leftJoin({ u: 'units' }, 'u.id', 'l.unit_id')
+    .leftJoin({ u: 'units' }, 'u.id', 'l.amount_unit_id')
     .leftJoin({ fn: 'nodes' }, 'fn.id', 'l.from_node_id')
     .leftJoin({ tn: 'nodes' }, 'tn.id', 'l.to_node_id')
     .leftJoin({ fw: 'warehouses' }, function joinFromWarehouse() {
@@ -82,13 +82,23 @@ export async function createMovementEvent(
         organization_id: organizationId,
         line_no: index + 1,
         item_id: line.itemId,
-        unit_id: line.unitId,
+        amount_unit_id: line.unitId,
         from_node_id: line.fromNodeId,
         to_node_id: line.toNodeId,
         quantity: line.quantity
       }))
     )
-    .returning(['id', 'event_id', 'organization_id', 'line_no', 'item_id', 'unit_id', 'from_node_id', 'to_node_id', 'quantity']);
+    .returning([
+      'id',
+      'event_id',
+      'organization_id',
+      'line_no',
+      'item_id',
+      'amount_unit_id',
+      'from_node_id',
+      'to_node_id',
+      'quantity'
+    ]);
 
   return { event, lines: lineRows };
 }
@@ -103,7 +113,7 @@ export async function getMovementLineById(organizationId, lineId) {
       'l.event_id',
       'l.organization_id',
       'l.item_id',
-      'l.unit_id',
+      'l.amount_unit_id',
       'l.from_node_id',
       'l.to_node_id',
       'l.quantity',
@@ -157,13 +167,22 @@ export async function updateDraftMovementLine(
     .where({ id: lineId, organization_id: organizationId })
     .update({
       item_id: itemId,
-      unit_id: unitId,
+      amount_unit_id: unitId,
       from_node_id: fromNodeId,
       to_node_id: toNodeId,
       quantity,
       updated_at: trx.fn.now()
     })
-    .returning(['id', 'event_id', 'organization_id', 'item_id', 'unit_id', 'from_node_id', 'to_node_id', 'quantity']);
+    .returning([
+      'id',
+      'event_id',
+      'organization_id',
+      'item_id',
+      'amount_unit_id',
+      'from_node_id',
+      'to_node_id',
+      'quantity'
+    ]);
 
   return { line: lineRows[0] };
 }
