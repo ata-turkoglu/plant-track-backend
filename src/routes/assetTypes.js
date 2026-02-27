@@ -106,6 +106,7 @@ function normalizeFields(rows) {
     normalized.push({
       name,
       label,
+      isDefault: false,
       dataType: normalizeDataType(rawDataType),
       required,
       unitId,
@@ -140,6 +141,7 @@ function ensureDefaultAssetTypeFields(rows) {
     output.push({
       name: defaultField.name,
       label: defaultField.label,
+      isDefault: true,
       dataType: 'text',
       required: false,
       unitId: null,
@@ -225,8 +227,9 @@ router.put('/organizations/:id/asset-types/:assetTypeId', (req, res) => {
     .then(async () => {
       const normalizedFields = normalizeFields(parsed.data.fields ?? []);
       if (!normalizedFields.ok) return { invalidFields: normalizedFields.message };
+      const fieldsWithDefaults = ensureDefaultAssetTypeFields(normalizedFields.value);
 
-      const validUnitIds = await validateUnitIds(organizationId, normalizedFields.value);
+      const validUnitIds = await validateUnitIds(organizationId, fieldsWithDefaults);
       if (!validUnitIds) return { invalidUnit: true };
 
       const existing = await db('asset_types').where({ id: assetTypeId, organization_id: organizationId }).first(['id']);
@@ -239,7 +242,7 @@ router.put('/organizations/:id/asset-types/:assetTypeId', (req, res) => {
           code: parsed.data.code,
           name: parsed.data.name,
           active: parsed.data.active,
-          fields: normalizedFields.value
+          fields: fieldsWithDefaults
         })
       );
 
