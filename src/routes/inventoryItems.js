@@ -46,7 +46,7 @@ const createSchema = z.object({
   model: z.string().max(255).optional().nullable(),
   size_spec: z.string().max(255).optional().nullable(),
   size_unit_id: z.number().int().positive().optional().nullable(),
-  unit_id: z.number().int().positive(),
+  amount_unit_id: z.number().int().positive().optional(),
   active: z.boolean().optional()
 });
 
@@ -107,7 +107,10 @@ router.post('/organizations/:id/inventory-items', (req, res) => {
         return { inventoryItem };
       }
 
-      const unit = await getUnitById(parsed.data.unit_id);
+      const resolvedUnitId = parsed.data.amount_unit_id;
+      if (!resolvedUnitId) return { badUnit: true };
+
+      const unit = await getUnitById(resolvedUnitId);
       if (!unit || unit.organization_id !== organizationId || !unit.active) return { badUnit: true };
 
       if (parsed.data.size_unit_id) {
@@ -168,7 +171,7 @@ const updateSchema = z.object({
   model: z.string().max(255).optional().nullable(),
   size_spec: z.string().max(255).optional().nullable(),
   size_unit_id: z.number().int().positive().optional().nullable(),
-  unit_id: z.number().int().positive(),
+  amount_unit_id: z.number().int().positive().optional(),
   inventory_item_card_id: z.number().int().positive().optional().nullable(),
   active: z.boolean().optional()
 });
@@ -214,7 +217,9 @@ router.put('/organizations/:id/inventory-items/:inventoryItemId', (req, res) => 
       if (isCardChange && !card.active) return { badInventoryCard: true };
       if (card.warehouse_type_id !== existingItem.warehouse_type_id) return { badInventoryCard: true };
 
-      const resolvedUnitId = isCardScopedType || isCardChange ? card.amount_unit_id : parsed.data.unit_id;
+      const requestedUnitId = parsed.data.amount_unit_id;
+      const resolvedUnitId = isCardScopedType || isCardChange ? card.amount_unit_id : requestedUnitId;
+      if (!resolvedUnitId) return { badUnit: true };
       const unit = await getUnitById(resolvedUnitId);
       if (!unit || unit.organization_id !== organizationId || !unit.active) return { badUnit: true };
 

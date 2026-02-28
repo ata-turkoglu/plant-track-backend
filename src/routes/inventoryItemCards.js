@@ -36,7 +36,6 @@ router.get('/organizations/:id/inventory-item-cards', (req, res) => {
 const upsertSchema = z.object({
   warehouse_type_id: z.number().int().positive(),
   amount_unit_id: z.number().int().positive().optional(),
-  unit_id: z.number().int().positive().optional(),
   code: z.string().trim().min(1).max(64),
   name: z.string().trim().min(1).max(255),
   type_spec: z.string().trim().max(255).optional().nullable(),
@@ -61,7 +60,7 @@ router.post('/organizations/:id/inventory-item-cards', (req, res) => {
         .first(['id']);
       if (conflict) return { conflict: true };
 
-      const resolvedUnitId = parsed.data.amount_unit_id ?? parsed.data.unit_id;
+      const resolvedUnitId = parsed.data.amount_unit_id;
       if (!resolvedUnitId) return { badUnit: true };
 
       const unit = await getUnitById(resolvedUnitId);
@@ -125,7 +124,7 @@ router.put('/organizations/:id/inventory-item-cards/:inventoryItemCardId', (req,
         .first(['id']);
       if (conflict) return { conflict: true };
 
-      const resolvedUnitId = parsed.data.amount_unit_id ?? parsed.data.unit_id;
+      const resolvedUnitId = parsed.data.amount_unit_id;
       if (!resolvedUnitId) return { badUnit: true };
 
       const unit = await getUnitById(resolvedUnitId);

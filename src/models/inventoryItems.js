@@ -6,6 +6,7 @@ function inventoryItemSelectColumns(dbOrTrx) {
     'ii.organization_id',
     'ii.inventory_item_card_id',
     'ii.warehouse_type_id',
+    'ii.amount_unit_id',
     'ii.code',
     'ii.name',
     'ii.description',
@@ -15,7 +16,6 @@ function inventoryItemSelectColumns(dbOrTrx) {
     dbOrTrx.raw('iic.name as inventory_item_card_name'),
     dbOrTrx.raw('iic.size_spec as size_spec'),
     dbOrTrx.raw('iic.size_unit_id as size_unit_id'),
-    'ii.unit_id',
     'ii.active'
   ];
 }
@@ -71,7 +71,7 @@ export async function createInventoryItem(
       description: description ?? null,
       brand: brand ?? null,
       model: model ?? null,
-      unit_id: unitId,
+      amount_unit_id: unitId,
       active: active ?? true
     })
     .returning(['id']);
@@ -91,7 +91,7 @@ export async function updateInventoryItem(
     description: description ?? null,
     brand: brand ?? null,
     model: model ?? null,
-    unit_id: unitId,
+    amount_unit_id: unitId,
     active,
     updated_at: trx.fn.now()
   };

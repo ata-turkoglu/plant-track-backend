@@ -18,8 +18,7 @@ router.use('/organizations/:id', loadOrganizationContext);
 const lineSchema = z.object({
   inventory_item_id: z.number().int().positive(),
   quantity: z.number().positive(),
-  amount_unit_id: z.number().int().positive().optional(),
-  unit_id: z.number().int().positive().optional(),
+  amount_unit_id: z.number().int().positive(),
   from_node_id: z.number().int().positive(),
   to_node_id: z.number().int().positive()
 });
@@ -35,7 +34,6 @@ const createSchema = z.object({
   inventory_item_id: z.number().int().positive().optional(),
   quantity: z.number().positive().optional(),
   amount_unit_id: z.number().int().positive().optional(),
-  unit_id: z.number().int().positive().optional(),
   from_node_id: z.number().int().positive().optional(),
   to_node_id: z.number().int().positive().optional()
 });
@@ -51,7 +49,6 @@ function normalizeLines(payload) {
         inventory_item_id: payload.inventory_item_id,
         quantity: payload.quantity,
         amount_unit_id: payload.amount_unit_id,
-        unit_id: payload.unit_id,
         from_node_id: payload.from_node_id,
         to_node_id: payload.to_node_id
       }
@@ -79,7 +76,7 @@ async function validateLineInputs(organizationId, lines) {
     db('inventory_items')
       .where({ organization_id: organizationId })
       .whereIn('id', itemIds)
-      .select(['id', 'unit_id'])
+      .select(['id', 'amount_unit_id'])
   ]);
 
   const nodeIdSet = new Set(nodes.map((row) => row.id));
@@ -93,7 +90,7 @@ async function validateLineInputs(organizationId, lines) {
     const item = itemMap.get(line.inventory_item_id);
     if (!item) return { badItem: true };
 
-    requiredUnitIds.add(line.amount_unit_id ?? line.unit_id ?? item.unit_id);
+    requiredUnitIds.add(line.amount_unit_id ?? item.amount_unit_id);
   }
 
   const units = await db('units')
@@ -105,7 +102,7 @@ async function validateLineInputs(organizationId, lines) {
   const validatedLines = [];
   for (const line of lines) {
     const item = itemMap.get(line.inventory_item_id);
-    const unitId = line.amount_unit_id ?? line.unit_id ?? item.unit_id;
+    const unitId = line.amount_unit_id ?? item.amount_unit_id;
     if (!unitIdSet.has(unitId)) return { badUnit: true };
 
     validatedLines.push({

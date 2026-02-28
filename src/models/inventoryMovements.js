@@ -228,7 +228,7 @@ export async function listBalancesByOrganization(
     .from(ledger)
     .leftJoin({ n: 'nodes' }, 'n.id', 'l.node_id')
     .leftJoin({ ii: 'inventory_items' }, 'ii.id', 'l.inventory_item_id')
-    .leftJoin({ u: 'units' }, 'u.id', 'ii.unit_id')
+    .leftJoin({ u: 'units' }, 'u.id', 'ii.amount_unit_id')
     .where('l.organization_id', organizationId)
     .groupBy(['l.organization_id', 'l.node_id', 'n.node_type', 'n.name', 'l.inventory_item_id', 'ii.code', 'ii.name', 'u.code'])
     .select([
