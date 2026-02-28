@@ -8,6 +8,7 @@ function itemSelectColumns(dbOrTrx) {
     'i.warehouse_type_id',
     'i.code',
     'i.name',
+    'i.description',
     'i.brand',
     'i.model',
     dbOrTrx.raw('ig.code as item_group_code'),
@@ -58,7 +59,7 @@ export async function getItemById(id) {
 
 export async function createItem(
   trx,
-  { organizationId, itemGroupId, warehouseTypeId, code, name, brand, model, unitId, active }
+  { organizationId, itemGroupId, warehouseTypeId, code, name, description, brand, model, unitId, active }
 ) {
   const rows = await trx('items')
     .insert({
@@ -67,6 +68,7 @@ export async function createItem(
       warehouse_type_id: warehouseTypeId,
       code,
       name,
+      description: description ?? null,
       brand: brand ?? null,
       model: model ?? null,
       unit_id: unitId,
@@ -81,11 +83,12 @@ export async function createItem(
 
 export async function updateItem(
   trx,
-  { organizationId, itemId, itemGroupId, code, name, brand, model, unitId, active }
+  { organizationId, itemId, itemGroupId, code, name, description, brand, model, unitId, active }
 ) {
   const patch = {
     code,
     name,
+    description: description ?? null,
     brand: brand ?? null,
     model: model ?? null,
     unit_id: unitId,

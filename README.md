@@ -2,9 +2,15 @@
 
 This file is for AI agents working in backend scope (`backend/`).
 
+## Start Here
+
+- Cross-scope agent guide: [`../README.md`](../README.md)
+- Project overview: [`../README.md`](../README.md)
+
 ## First Read (Required)
 
-- `docs/db/SCHEMA.md`
+- DB agent guide: [`../docs/db/README.md`](../docs/db/README.md)
+- DB schema source of truth: [`../docs/db/SCHEMA.md`](../docs/db/SCHEMA.md)
 
 Before backend changes, read schema doc first and align route/model behavior with it.
 
@@ -25,6 +31,15 @@ Before backend changes, read schema doc first and align route/model behavior wit
 - `src/routes/`: API handlers
 - `src/models/`: DB/domain operations
 - `migrations/000000_init.cjs`: current squashed migration
+
+## Local Dev
+
+```bash
+cd backend
+npm install
+npm run db:setup
+npm run dev
+```
 
 ## Recent Backend Notes (Do Not Miss)
 

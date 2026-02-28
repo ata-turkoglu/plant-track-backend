@@ -8,6 +8,22 @@ import { createAssetType, deleteAssetType, listAssetTypesByOrganization, updateA
 const router = Router();
 router.use('/organizations/:id', loadOrganizationContext);
 
+function inferSchemaHint(err) {
+  const code = err && typeof err === 'object' ? err.code : undefined;
+  const message = err && typeof err === 'object' && typeof err.message === 'string' ? err.message : '';
+
+  if (code === '42P01' || /relation .*asset_types.* does not exist/i.test(message) || /relation .*asset_type_fields.* does not exist/i.test(message)) {
+    return 'DB schema eksik (asset types). Backend tarafinda `npm run migrate` calistir.';
+  }
+
+  return null;
+}
+
+function isUniqueViolation(err) {
+  const code = err && typeof err === 'object' ? err.code : undefined;
+  return code === '23505';
+}
+
 router.get('/organizations/:id/asset-types', (req, res) => {
   const organizationId = req.organizationId;
   const activeParam = typeof req.query.active === 'string' ? req.query.active : undefined;
@@ -23,7 +39,11 @@ router.get('/organizations/:id/asset-types', (req, res) => {
       return listAssetTypesByOrganization(organizationId, { active, q, code, name, hasSchema });
     })
     .then((assetTypes) => res.status(200).json({ assetTypes }))
-    .catch(() => res.status(500).json({ message: 'Failed to fetch asset types' }));
+    .catch((err) => {
+      const hint = inferSchemaHint(err);
+      if (hint) return res.status(500).json({ message: hint });
+      return res.status(500).json({ message: 'Failed to fetch asset types' });
+    });
 });
 
 const FIELD_DATA_TYPES = ['text', 'number', 'boolean', 'date'];
@@ -212,7 +232,12 @@ router.post('/organizations/:id/asset-types', (req, res) => {
       if (result.invalidUnit) return res.status(400).json({ message: 'Invalid unit reference in fields' });
       return res.status(201).json({ assetType: result.assetType });
     })
-    .catch(() => res.status(500).json({ message: 'Failed to create asset type' }));
+    .catch((err) => {
+      if (isUniqueViolation(err)) return res.status(409).json({ message: 'Asset type code already exists' });
+      const hint = inferSchemaHint(err);
+      if (hint) return res.status(500).json({ message: hint });
+      return res.status(500).json({ message: 'Failed to create asset type' });
+    });
 });
 
 router.put('/organizations/:id/asset-types/:assetTypeId', (req, res) => {
@@ -255,7 +280,12 @@ router.put('/organizations/:id/asset-types/:assetTypeId', (req, res) => {
       if (!result.assetType) return res.status(404).json({ message: 'Asset type not found' });
       return res.status(200).json({ assetType: result.assetType });
     })
-    .catch(() => res.status(500).json({ message: 'Failed to update asset type' }));
+    .catch((err) => {
+      if (isUniqueViolation(err)) return res.status(409).json({ message: 'Asset type code already exists' });
+      const hint = inferSchemaHint(err);
+      if (hint) return res.status(500).json({ message: hint });
+      return res.status(500).json({ message: 'Failed to update asset type' });
+    });
 });
 
 router.delete('/organizations/:id/asset-types/:assetTypeId', (req, res) => {
@@ -280,7 +310,11 @@ router.delete('/organizations/:id/asset-types/:assetTypeId', (req, res) => {
       if (result.conflict) return res.status(409).json({ message: 'Asset type is in use' });
       return res.status(204).send();
     })
-    .catch(() => res.status(500).json({ message: 'Failed to delete asset type' }));
+    .catch((err) => {
+      const hint = inferSchemaHint(err);
+      if (hint) return res.status(500).json({ message: hint });
+      return res.status(500).json({ message: 'Failed to delete asset type' });
+    });
 });
 
 export default router;
