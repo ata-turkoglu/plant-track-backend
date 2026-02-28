@@ -2,8 +2,9 @@ import db from '../db/knex.js';
 
 export async function listAssetsByOrganization(
   organizationId,
-  { locationId, parentAssetId, assetTypeId, active } = {}
+  { locationId, parentAssetId, assetCardId, assetTypeId, active } = {}
 ) {
+  const resolvedAssetCardId = assetCardId ?? assetTypeId;
   const q = db('assets')
     .where({ organization_id: organizationId })
     .select([
@@ -11,7 +12,7 @@ export async function listAssetsByOrganization(
       'organization_id',
       'location_id',
       'parent_asset_id',
-      'asset_type_id',
+      'asset_card_id',
       'code',
       'name',
       'image_url',
@@ -27,7 +28,7 @@ export async function listAssetsByOrganization(
 
   if (typeof active === 'boolean') q.andWhere({ active });
   if (Number.isFinite(Number(locationId))) q.andWhere({ location_id: Number(locationId) });
-  if (Number.isFinite(Number(assetTypeId))) q.andWhere({ asset_type_id: Number(assetTypeId) });
+  if (Number.isFinite(Number(resolvedAssetCardId))) q.andWhere({ asset_card_id: Number(resolvedAssetCardId) });
 
   if (parentAssetId === null) q.whereNull('parent_asset_id');
   if (Number.isFinite(Number(parentAssetId))) q.andWhere({ parent_asset_id: Number(parentAssetId) });
@@ -43,7 +44,7 @@ export async function getAssetById(organizationId, assetId) {
       'organization_id',
       'location_id',
       'parent_asset_id',
-      'asset_type_id',
+      'asset_card_id',
       'code',
       'name',
       'image_url',
@@ -59,14 +60,15 @@ export async function getAssetById(organizationId, assetId) {
 
 export async function createAsset(
   trx,
-  { organizationId, locationId, parentAssetId, assetTypeId, code, name, imageUrl, active, attributesJson }
+  { organizationId, locationId, parentAssetId, assetCardId, assetTypeId, code, name, imageUrl, active, attributesJson }
 ) {
+  const resolvedAssetCardId = assetCardId ?? assetTypeId;
   const rows = await trx('assets')
     .insert({
       organization_id: organizationId,
       location_id: locationId,
       parent_asset_id: parentAssetId ?? null,
-      asset_type_id: assetTypeId ?? null,
+      asset_card_id: resolvedAssetCardId ?? null,
       code: code ?? null,
       name,
       image_url: imageUrl ?? null,
@@ -81,7 +83,7 @@ export async function createAsset(
       'organization_id',
       'location_id',
       'parent_asset_id',
-      'asset_type_id',
+      'asset_card_id',
       'code',
       'name',
       'image_url',
@@ -97,12 +99,16 @@ export async function createAsset(
   return rows[0];
 }
 
-export async function updateAsset(trx, { organizationId, assetId, parentAssetId, assetTypeId, code, name, imageUrl, active, attributesJson }) {
+export async function updateAsset(
+  trx,
+  { organizationId, assetId, parentAssetId, assetCardId, assetTypeId, code, name, imageUrl, active, attributesJson }
+) {
+  const resolvedAssetCardId = assetCardId ?? assetTypeId;
   const rows = await trx('assets')
     .where({ id: assetId, organization_id: organizationId })
     .update({
       parent_asset_id: parentAssetId ?? null,
-      asset_type_id: assetTypeId ?? null,
+      asset_card_id: resolvedAssetCardId ?? null,
       code: code ?? null,
       name,
       image_url: imageUrl ?? null,
@@ -115,7 +121,7 @@ export async function updateAsset(trx, { organizationId, assetId, parentAssetId,
       'organization_id',
       'location_id',
       'parent_asset_id',
-      'asset_type_id',
+      'asset_card_id',
       'code',
       'name',
       'image_url',
@@ -140,7 +146,7 @@ export async function lockAssetForUpdate(trx, { organizationId, assetId }) {
   return trx('assets')
     .where({ id: assetId, organization_id: organizationId })
     .forUpdate()
-    .first(['id', 'location_id', 'current_state', 'running_since', 'runtime_seconds', 'active', 'code', 'name', 'asset_type_id', 'parent_asset_id']);
+    .first(['id', 'location_id', 'current_state', 'running_since', 'runtime_seconds', 'active', 'code', 'name', 'asset_card_id', 'parent_asset_id']);
 }
 
 export async function updateAssetLocation(trx, { organizationId, assetId, toLocationId }) {
@@ -152,7 +158,7 @@ export async function updateAssetLocation(trx, { organizationId, assetId, toLoca
       'organization_id',
       'location_id',
       'parent_asset_id',
-      'asset_type_id',
+      'asset_card_id',
       'code',
       'name',
       'image_url',
@@ -189,7 +195,7 @@ export async function updateAssetState(trx, { organizationId, assetId, currentSt
       'organization_id',
       'location_id',
       'parent_asset_id',
-      'asset_type_id',
+      'asset_card_id',
       'code',
       'name',
       'image_url',

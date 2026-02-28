@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import db from '../db/knex.js';
 import { loadOrganizationContext } from '../middleware/organizationContext.js';
-import { listAssetTypeFieldsByAssetType } from '../models/assetTypes.js';
+import { listAssetCardFieldsByAssetCard } from '../models/assetCards.js';
 import { deleteRefNode, findNodeByRef, upsertRefNode } from '../models/nodes.js';
 import {
   createAsset,
@@ -33,7 +33,7 @@ function buildAssetNodeMeta(asset) {
     active: asset.active,
     location_id: asset.location_id ?? null,
     parent_asset_id: asset.parent_asset_id ?? null,
-    asset_type_id: asset.asset_type_id ?? null,
+    asset_card_id: asset.asset_card_id ?? null,
     current_state: asset.current_state,
     running_since: asset.running_since ?? null,
     runtime_seconds: asset.runtime_seconds ?? 0
@@ -85,11 +85,11 @@ function mapAssetTypeFieldsToSchemaRows(rows) {
     .filter((row) => Boolean(row.key));
 }
 
-async function resolveAssetTypeSchemaRows(organizationId, assetTypeId) {
-  const type = await db('asset_types').where({ id: assetTypeId, organization_id: organizationId }).first(['id']);
-  if (!type) return { notFound: true };
+async function resolveAssetCardSchemaRows(organizationId, assetCardId) {
+  const card = await db('asset_cards').where({ id: assetCardId, organization_id: organizationId }).first(['id']);
+  if (!card) return { notFound: true };
 
-  const fieldRows = await listAssetTypeFieldsByAssetType(organizationId, assetTypeId, { active: true });
+  const fieldRows = await listAssetCardFieldsByAssetCard(organizationId, assetCardId, { active: true });
   return { notFound: false, schemaRows: mapAssetTypeFieldsToSchemaRows(fieldRows) };
 }
 
@@ -186,14 +186,16 @@ router.get('/organizations/:id/assets', (req, res) => {
 
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : undefined;
   const parentAssetIdRaw = typeof req.query.parentAssetId === 'string' ? req.query.parentAssetId : undefined;
+  const assetCardId = typeof req.query.assetCardId === 'string' ? req.query.assetCardId : undefined;
   const assetTypeId = typeof req.query.assetTypeId === 'string' ? req.query.assetTypeId : undefined;
   const activeRaw = typeof req.query.active === 'string' ? req.query.active : undefined;
 
   const parentAssetId = parentAssetIdRaw === undefined ? undefined : parentAssetIdRaw === 'null' ? null : Number(parentAssetIdRaw);
   const active = activeRaw === undefined ? undefined : activeRaw.toLowerCase() === 'true';
+  const resolvedAssetCardId = assetCardId ?? assetTypeId;
 
   return Promise.resolve()
-    .then(() => listAssetsByOrganization(organizationId, { locationId, parentAssetId, assetTypeId, active }))
+    .then(() => listAssetsByOrganization(organizationId, { locationId, parentAssetId, assetCardId: resolvedAssetCardId, active }))
     .then((assets) => res.status(200).json({ assets }))
     .catch(() => res.status(500).json({ message: 'Failed to fetch assets' }));
 });
@@ -215,6 +217,7 @@ router.get('/organizations/:id/assets/:assetId', (req, res) => {
 const createSchema = z.object({
   location_id: z.number().int().positive(),
   parent_asset_id: z.number().int().positive().optional().nullable(),
+  asset_card_id: z.number().int().positive().optional().nullable(),
   asset_type_id: z.number().int().positive().optional().nullable(),
   code: z.string().min(1).max(64).optional().nullable(),
   name: z.string().min(1).max(255),
@@ -243,8 +246,9 @@ router.post('/organizations/:id/assets', (req, res) => {
         if (!parent) return { notFoundParent: true };
       }
 
-      if (parsed.data.asset_type_id) {
-        const resolvedType = await resolveAssetTypeSchemaRows(organizationId, parsed.data.asset_type_id);
+      const resolvedAssetCardId = parsed.data.asset_card_id ?? parsed.data.asset_type_id ?? null;
+      if (resolvedAssetCardId) {
+        const resolvedType = await resolveAssetCardSchemaRows(organizationId, resolvedAssetCardId);
         if (resolvedType.notFound) return { notFoundType: true };
 
         const schemaRows = resolvedType.schemaRows;
@@ -258,7 +262,7 @@ router.post('/organizations/:id/assets', (req, res) => {
           organizationId,
           locationId: parsed.data.location_id,
           parentAssetId: parsed.data.parent_asset_id ?? null,
-          assetTypeId: parsed.data.asset_type_id ?? null,
+          assetCardId: resolvedAssetCardId,
           code: parsed.data.code ?? null,
           name: parsed.data.name,
           imageUrl,
@@ -296,7 +300,7 @@ router.post('/organizations/:id/assets', (req, res) => {
       if (result.invalidImage) return res.status(400).json({ message: 'Invalid image_url. Use http(s) URL or data:image payload.' });
       if (result.notFoundLocation) return res.status(404).json({ message: 'Location not found' });
       if (result.notFoundParent) return res.status(404).json({ message: 'Parent asset not found' });
-      if (result.notFoundType) return res.status(404).json({ message: 'Asset type not found' });
+      if (result.notFoundType) return res.status(404).json({ message: 'Asset card not found' });
       if (result.invalidAttributes) return res.status(400).json({ message: result.invalidAttributes });
       return res.status(201).json({ asset: result.asset });
     })
@@ -305,6 +309,7 @@ router.post('/organizations/:id/assets', (req, res) => {
 
 const updateSchema = z.object({
   parent_asset_id: z.number().int().positive().optional().nullable(),
+  asset_card_id: z.number().int().positive().optional().nullable(),
   asset_type_id: z.number().int().positive().optional().nullable(),
   code: z.string().min(1).max(64).optional().nullable(),
   name: z.string().min(1).max(255),
@@ -340,8 +345,9 @@ router.put('/organizations/:id/assets/:assetId', (req, res) => {
         if (!parent) return { notFoundParent: true };
       }
 
-      if (parsed.data.asset_type_id) {
-        const resolvedType = await resolveAssetTypeSchemaRows(organizationId, parsed.data.asset_type_id);
+      const resolvedAssetCardId = parsed.data.asset_card_id ?? parsed.data.asset_type_id ?? null;
+      if (resolvedAssetCardId) {
+        const resolvedType = await resolveAssetCardSchemaRows(organizationId, resolvedAssetCardId);
         if (resolvedType.notFound) return { notFoundType: true };
 
         const schemaRows = resolvedType.schemaRows;
@@ -355,7 +361,7 @@ router.put('/organizations/:id/assets/:assetId', (req, res) => {
           organizationId,
           assetId,
           parentAssetId: parsed.data.parent_asset_id ?? null,
-          assetTypeId: parsed.data.asset_type_id ?? null,
+          assetCardId: resolvedAssetCardId,
           code: parsed.data.code ?? null,
           name: parsed.data.name,
           imageUrl,
@@ -385,7 +391,7 @@ router.put('/organizations/:id/assets/:assetId', (req, res) => {
       if (result.notFound) return res.status(404).json({ message: 'Asset not found' });
       if (result.selfParent) return res.status(400).json({ message: 'Asset cannot be its own parent' });
       if (result.notFoundParent) return res.status(404).json({ message: 'Parent asset not found' });
-      if (result.notFoundType) return res.status(404).json({ message: 'Asset type not found' });
+      if (result.notFoundType) return res.status(404).json({ message: 'Asset card not found' });
       if (result.invalidAttributes) return res.status(400).json({ message: result.invalidAttributes });
       if (!result.asset) return res.status(404).json({ message: 'Asset not found' });
       return res.status(200).json({ asset: result.asset });
