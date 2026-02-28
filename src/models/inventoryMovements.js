@@ -4,7 +4,7 @@ export async function listMovementsByOrganization(organizationId, limit = 100) {
   return db('inventory_movement_lines')
     .from({ l: 'inventory_movement_lines' })
     .join({ e: 'inventory_movement_events' }, 'e.id', 'l.event_id')
-    .leftJoin({ i: 'items' }, 'i.id', 'l.item_id')
+    .leftJoin({ ii: 'inventory_items' }, 'ii.id', 'l.inventory_item_id')
     .leftJoin({ u: 'units' }, 'u.id', 'l.amount_unit_id')
     .leftJoin({ fn: 'nodes' }, 'fn.id', 'l.from_node_id')
     .leftJoin({ tn: 'nodes' }, 'tn.id', 'l.to_node_id')
@@ -27,7 +27,7 @@ export async function listMovementsByOrganization(organizationId, limit = 100) {
       'l.id',
       'l.organization_id',
       db.raw('e.id::text as movement_group_id'),
-      'l.item_id',
+      'l.inventory_item_id',
       db.raw('e.event_type as movement_type'),
       'l.quantity',
       db.raw('u.code as uom'),
@@ -47,8 +47,8 @@ export async function listMovementsByOrganization(organizationId, limit = 100) {
       db.raw('tn.name as to_ref'),
       db.raw('coalesce(tw.id, fw.id) as warehouse_id'),
       db.raw('null::integer as location_id'),
-      db.raw('i.code as item_code'),
-      db.raw('i.name as item_name'),
+      db.raw('ii.code as inventory_item_code'),
+      db.raw('ii.name as inventory_item_name'),
       db.raw("coalesce(tw.name, fw.name, '-') as warehouse_name"),
       db.raw("null::text as location_name"),
       db.raw('e.status as status'),
@@ -81,7 +81,7 @@ export async function createMovementEvent(
         event_id: event.id,
         organization_id: organizationId,
         line_no: index + 1,
-        item_id: line.itemId,
+        inventory_item_id: line.inventoryItemId,
         amount_unit_id: line.unitId,
         from_node_id: line.fromNodeId,
         to_node_id: line.toNodeId,
@@ -93,7 +93,7 @@ export async function createMovementEvent(
       'event_id',
       'organization_id',
       'line_no',
-      'item_id',
+      'inventory_item_id',
       'amount_unit_id',
       'from_node_id',
       'to_node_id',
@@ -112,7 +112,7 @@ export async function getMovementLineById(organizationId, lineId) {
       'l.id',
       'l.event_id',
       'l.organization_id',
-      'l.item_id',
+      'l.inventory_item_id',
       'l.amount_unit_id',
       'l.from_node_id',
       'l.to_node_id',
@@ -166,7 +166,7 @@ export async function updateDraftMovementLine(
   const lineRows = await trx('inventory_movement_lines')
     .where({ id: lineId, organization_id: organizationId })
     .update({
-      item_id: itemId,
+      inventory_item_id: itemId,
       amount_unit_id: unitId,
       from_node_id: fromNodeId,
       to_node_id: toNodeId,
@@ -177,7 +177,7 @@ export async function updateDraftMovementLine(
       'id',
       'event_id',
       'organization_id',
-      'item_id',
+      'inventory_item_id',
       'amount_unit_id',
       'from_node_id',
       'to_node_id',
@@ -212,12 +212,12 @@ export async function listBalancesByOrganization(
   { nodeIds = [], itemIds = [], fromDate, toDate, statuses = ['POSTED'] } = {}
 ) {
   const ledger = db.raw(
-    `(select l.organization_id, l.item_id, l.to_node_id as node_id, l.quantity::numeric as delta, e.occurred_at, e.status
+    `(select l.organization_id, l.inventory_item_id, l.to_node_id as node_id, l.quantity::numeric as delta, e.occurred_at, e.status
       from inventory_movement_lines l
       join inventory_movement_events e on e.id = l.event_id
       where l.organization_id = ?
       union all
-      select l.organization_id, l.item_id, l.from_node_id as node_id, (-l.quantity)::numeric as delta, e.occurred_at, e.status
+      select l.organization_id, l.inventory_item_id, l.from_node_id as node_id, (-l.quantity)::numeric as delta, e.occurred_at, e.status
       from inventory_movement_lines l
       join inventory_movement_events e on e.id = l.event_id
       where l.organization_id = ?) as l`,
@@ -227,18 +227,18 @@ export async function listBalancesByOrganization(
   const query = db
     .from(ledger)
     .leftJoin({ n: 'nodes' }, 'n.id', 'l.node_id')
-    .leftJoin({ i: 'items' }, 'i.id', 'l.item_id')
-    .leftJoin({ u: 'units' }, 'u.id', 'i.unit_id')
+    .leftJoin({ ii: 'inventory_items' }, 'ii.id', 'l.inventory_item_id')
+    .leftJoin({ u: 'units' }, 'u.id', 'ii.unit_id')
     .where('l.organization_id', organizationId)
-    .groupBy(['l.organization_id', 'l.node_id', 'n.node_type', 'n.name', 'l.item_id', 'i.code', 'i.name', 'u.code'])
+    .groupBy(['l.organization_id', 'l.node_id', 'n.node_type', 'n.name', 'l.inventory_item_id', 'ii.code', 'ii.name', 'u.code'])
     .select([
       'l.organization_id',
       'l.node_id',
       db.raw('n.node_type'),
       db.raw('n.name as node_name'),
-      'l.item_id',
-      db.raw('i.code as item_code'),
-      db.raw('i.name as item_name'),
+      'l.inventory_item_id',
+      db.raw('ii.code as inventory_item_code'),
+      db.raw('ii.name as inventory_item_name'),
       db.raw('u.code as unit_code'),
       db.raw('sum(l.delta) as balance_qty')
     ])
@@ -246,12 +246,12 @@ export async function listBalancesByOrganization(
     .orderBy([
       { column: 'n.node_type', order: 'asc' },
       { column: 'n.name', order: 'asc' },
-      { column: 'i.code', order: 'asc' }
+      { column: 'ii.code', order: 'asc' }
     ]);
 
   if (statuses.length > 0) query.whereIn('l.status', statuses);
   if (nodeIds.length > 0) query.whereIn('l.node_id', nodeIds);
-  if (itemIds.length > 0) query.whereIn('l.item_id', itemIds);
+  if (itemIds.length > 0) query.whereIn('l.inventory_item_id', itemIds);
   if (fromDate) query.where('l.occurred_at', '>=', fromDate);
   if (toDate) query.where('l.occurred_at', '<=', toDate);
 

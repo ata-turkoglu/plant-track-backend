@@ -3,40 +3,40 @@ import db from '../db/knex.js';
 export async function listAssetBomLines(organizationId, assetId) {
   return db('asset_bom_lines as abl')
     .where({ 'abl.organization_id': organizationId, 'abl.asset_id': assetId })
-    .join('item_groups as ig', 'abl.item_group_id', 'ig.id')
+    .join('inventory_item_cards as iic', 'abl.inventory_item_card_id', 'iic.id')
     .join('units as u', 'abl.unit_id', 'u.id')
-    .leftJoin({ su: 'units' }, 'ig.size_unit_id', 'su.id')
+    .leftJoin({ su: 'units' }, 'iic.size_unit_id', 'su.id')
     .select([
       'abl.id',
       'abl.organization_id',
       'abl.asset_id',
-      'abl.item_group_id',
+      'abl.inventory_item_card_id',
       'abl.unit_id',
       'abl.quantity',
       'abl.note',
       'abl.meta_json',
       'abl.created_at',
       'abl.updated_at',
-      'ig.code as item_group_code',
-      'ig.name as item_group_name',
-      'ig.size_spec as item_group_size_spec',
-      'ig.size_unit_id as item_group_size_unit_id',
-      'su.code as item_group_size_unit_code',
-      'su.name as item_group_size_unit_name',
-      'su.symbol as item_group_size_unit_symbol',
+      'iic.code as inventory_item_card_code',
+      'iic.name as inventory_item_card_name',
+      'iic.size_spec as inventory_item_card_size_spec',
+      'iic.size_unit_id as inventory_item_card_size_unit_id',
+      'su.code as inventory_item_card_size_unit_code',
+      'su.name as inventory_item_card_size_unit_name',
+      'su.symbol as inventory_item_card_size_unit_symbol',
       'u.code as unit_code',
       'u.name as unit_name',
       'u.symbol as unit_symbol'
     ])
-    .orderBy([{ column: 'ig.name', order: 'asc' }, { column: 'abl.id', order: 'asc' }]);
+    .orderBy([{ column: 'iic.name', order: 'asc' }, { column: 'abl.id', order: 'asc' }]);
 }
 
-export async function createAssetBomLine(trx, { organizationId, assetId, itemGroupId, unitId, quantity, note, metaJson }) {
+export async function createAssetBomLine(trx, { organizationId, assetId, inventoryItemCardId, unitId, quantity, note, metaJson }) {
   const rows = await trx('asset_bom_lines')
     .insert({
       organization_id: organizationId,
       asset_id: assetId,
-      item_group_id: itemGroupId,
+      inventory_item_card_id: inventoryItemCardId,
       unit_id: unitId,
       quantity,
       note: note ?? null,
@@ -46,7 +46,7 @@ export async function createAssetBomLine(trx, { organizationId, assetId, itemGro
       'id',
       'organization_id',
       'asset_id',
-      'item_group_id',
+      'inventory_item_card_id',
       'unit_id',
       'quantity',
       'note',
@@ -70,7 +70,7 @@ export async function updateAssetBomLine(trx, { organizationId, assetId, lineId,
       'id',
       'organization_id',
       'asset_id',
-      'item_group_id',
+      'inventory_item_card_id',
       'unit_id',
       'quantity',
       'note',
@@ -105,39 +105,39 @@ export async function getAssetBomRollup(organizationId, rootAssetId) {
       where child.organization_id = ?
     )
     select
-      abl.item_group_id,
+      abl.inventory_item_card_id,
       abl.unit_id,
       sum(abl.quantity)::numeric(18,3) as required_quantity,
-      ig.code as item_group_code,
-      ig.name as item_group_name,
-      ig.size_spec as item_group_size_spec,
-      ig.size_unit_id as item_group_size_unit_id,
-      su.code as item_group_size_unit_code,
-      su.name as item_group_size_unit_name,
-      su.symbol as item_group_size_unit_symbol,
+      iic.code as inventory_item_card_code,
+      iic.name as inventory_item_card_name,
+      iic.size_spec as inventory_item_card_size_spec,
+      iic.size_unit_id as inventory_item_card_size_unit_id,
+      su.code as inventory_item_card_size_unit_code,
+      su.name as inventory_item_card_size_unit_name,
+      su.symbol as inventory_item_card_size_unit_symbol,
       u.code as unit_code,
       u.name as unit_name,
       u.symbol as unit_symbol
     from asset_bom_lines abl
     join asset_tree t on t.id = abl.asset_id
-    join item_groups ig on ig.id = abl.item_group_id
+    join inventory_item_cards iic on iic.id = abl.inventory_item_card_id
     join units u on u.id = abl.unit_id
-    left join units su on su.id = ig.size_unit_id
+    left join units su on su.id = iic.size_unit_id
     where abl.organization_id = ?
     group by
-      abl.item_group_id,
+      abl.inventory_item_card_id,
       abl.unit_id,
-      ig.code,
-      ig.name,
-      ig.size_spec,
-      ig.size_unit_id,
+      iic.code,
+      iic.name,
+      iic.size_spec,
+      iic.size_unit_id,
       su.code,
       su.name,
       su.symbol,
       u.code,
       u.name,
       u.symbol
-    order by ig.name asc
+    order by iic.name asc
     `,
     [organizationId, rootAssetId, organizationId, organizationId]
   );

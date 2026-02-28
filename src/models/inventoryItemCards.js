@@ -1,6 +1,6 @@
 import db from '../db/knex.js';
 
-const ITEM_GROUP_COLUMNS = [
+const INVENTORY_ITEM_CARD_COLUMNS = [
   'id',
   'organization_id',
   'warehouse_type_id',
@@ -15,10 +15,10 @@ const ITEM_GROUP_COLUMNS = [
   'updated_at'
 ];
 
-export async function listItemGroupsByOrganization(organizationId, { active, q, warehouseTypeId, warehouseTypeCode } = {}) {
-  const query = db('item_groups')
+export async function listInventoryItemCardsByOrganization(organizationId, { active, q, warehouseTypeId, warehouseTypeCode } = {}) {
+  const query = db('inventory_item_cards')
     .where({ organization_id: organizationId })
-    .select(ITEM_GROUP_COLUMNS)
+    .select(INVENTORY_ITEM_CARD_COLUMNS)
     .orderBy([
       { column: 'active', order: 'desc' },
       { column: 'name', order: 'asc' },
@@ -57,15 +57,15 @@ export async function listItemGroupsByOrganization(organizationId, { active, q, 
   return query;
 }
 
-export async function getItemGroupById(id) {
-  return db('item_groups').where({ id }).first(ITEM_GROUP_COLUMNS);
+export async function getInventoryItemCardById(id) {
+  return db('inventory_item_cards').where({ id }).first(INVENTORY_ITEM_CARD_COLUMNS);
 }
 
-export async function createItemGroup(
+export async function createInventoryItemCard(
   trx,
   { organizationId, warehouseTypeId, amountUnitId, code, name, typeSpec, sizeSpec, sizeUnitId, active }
 ) {
-  const rows = await trx('item_groups')
+  const rows = await trx('inventory_item_cards')
     .insert({
       organization_id: organizationId,
       warehouse_type_id: warehouseTypeId,
@@ -82,17 +82,17 @@ export async function createItemGroup(
   const insertedId = rows[0]?.id ?? null;
   if (!insertedId) return null;
 
-  return trx('item_groups')
+  return trx('inventory_item_cards')
     .where({ id: insertedId, organization_id: organizationId })
-    .first(ITEM_GROUP_COLUMNS);
+    .first(INVENTORY_ITEM_CARD_COLUMNS);
 }
 
-export async function updateItemGroup(
+export async function updateInventoryItemCard(
   trx,
-  { organizationId, itemGroupId, warehouseTypeId, amountUnitId, code, name, typeSpec, sizeSpec, sizeUnitId, active }
+  { organizationId, inventoryItemCardId, warehouseTypeId, amountUnitId, code, name, typeSpec, sizeSpec, sizeUnitId, active }
 ) {
-  const rows = await trx('item_groups')
-    .where({ id: itemGroupId, organization_id: organizationId })
+  const rows = await trx('inventory_item_cards')
+    .where({ id: inventoryItemCardId, organization_id: organizationId })
     .update({
       warehouse_type_id: warehouseTypeId,
       amount_unit_id: amountUnitId,
@@ -109,25 +109,25 @@ export async function updateItemGroup(
   const updatedId = rows[0]?.id ?? null;
   if (!updatedId) return null;
 
-  return trx('item_groups')
+  return trx('inventory_item_cards')
     .where({ id: updatedId, organization_id: organizationId })
-    .first(ITEM_GROUP_COLUMNS);
+    .first(INVENTORY_ITEM_CARD_COLUMNS);
 }
 
-export async function setItemGroupActive(trx, { organizationId, itemGroupId, active }) {
-  const rows = await trx('item_groups')
-    .where({ id: itemGroupId, organization_id: organizationId })
+export async function setInventoryItemCardActive(trx, { organizationId, inventoryItemCardId, active }) {
+  const rows = await trx('inventory_item_cards')
+    .where({ id: inventoryItemCardId, organization_id: organizationId })
     .update({ active, updated_at: trx.fn.now() })
     .returning(['id']);
 
   const updatedId = rows[0]?.id ?? null;
   if (!updatedId) return null;
 
-  return trx('item_groups')
+  return trx('inventory_item_cards')
     .where({ id: updatedId, organization_id: organizationId })
-    .first(ITEM_GROUP_COLUMNS);
+    .first(INVENTORY_ITEM_CARD_COLUMNS);
 }
 
-export async function deleteItemGroup(trx, { organizationId, itemGroupId }) {
-  return trx('item_groups').where({ id: itemGroupId, organization_id: organizationId }).del();
+export async function deleteInventoryItemCard(trx, { organizationId, inventoryItemCardId }) {
+  return trx('inventory_item_cards').where({ id: inventoryItemCardId, organization_id: organizationId }).del();
 }

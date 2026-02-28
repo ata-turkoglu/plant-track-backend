@@ -16,7 +16,7 @@ const router = Router();
 router.use('/organizations/:id', loadOrganizationContext);
 
 const lineSchema = z.object({
-  item_id: z.number().int().positive(),
+  inventory_item_id: z.number().int().positive(),
   quantity: z.number().positive(),
   amount_unit_id: z.number().int().positive().optional(),
   unit_id: z.number().int().positive().optional(),
@@ -32,7 +32,7 @@ const createSchema = z.object({
   reference_id: z.string().max(64).optional().nullable(),
   note: z.string().max(4000).optional().nullable(),
   lines: z.array(lineSchema).min(1).optional(),
-  item_id: z.number().int().positive().optional(),
+  inventory_item_id: z.number().int().positive().optional(),
   quantity: z.number().positive().optional(),
   amount_unit_id: z.number().int().positive().optional(),
   unit_id: z.number().int().positive().optional(),
@@ -45,10 +45,10 @@ const updateSchema = createSchema;
 function normalizeLines(payload) {
   if (payload.lines && payload.lines.length > 0) return payload.lines;
 
-  if (payload.item_id && payload.quantity && payload.from_node_id && payload.to_node_id) {
+  if (payload.inventory_item_id && payload.quantity && payload.from_node_id && payload.to_node_id) {
     return [
       {
-        item_id: payload.item_id,
+        inventory_item_id: payload.inventory_item_id,
         quantity: payload.quantity,
         amount_unit_id: payload.amount_unit_id,
         unit_id: payload.unit_id,
@@ -69,14 +69,14 @@ async function validateLineInputs(organizationId, lines) {
   const nodeIds = Array.from(
     new Set(lines.flatMap((line) => [line.from_node_id, line.to_node_id]).filter((value) => Number.isFinite(value)))
   );
-  const itemIds = Array.from(new Set(lines.map((line) => line.item_id).filter((value) => Number.isFinite(value))));
+  const itemIds = Array.from(new Set(lines.map((line) => line.inventory_item_id).filter((value) => Number.isFinite(value))));
 
   const [nodes, items] = await Promise.all([
     db('nodes')
       .where({ organization_id: organizationId })
       .whereIn('id', nodeIds)
       .select(['id']),
-    db('items')
+    db('inventory_items')
       .where({ organization_id: organizationId })
       .whereIn('id', itemIds)
       .select(['id', 'unit_id'])
@@ -90,7 +90,7 @@ async function validateLineInputs(organizationId, lines) {
     if (!nodeIdSet.has(line.from_node_id)) return { badFromNode: true };
     if (!nodeIdSet.has(line.to_node_id)) return { badToNode: true };
 
-    const item = itemMap.get(line.item_id);
+    const item = itemMap.get(line.inventory_item_id);
     if (!item) return { badItem: true };
 
     requiredUnitIds.add(line.amount_unit_id ?? line.unit_id ?? item.unit_id);
@@ -104,12 +104,12 @@ async function validateLineInputs(organizationId, lines) {
 
   const validatedLines = [];
   for (const line of lines) {
-    const item = itemMap.get(line.item_id);
+    const item = itemMap.get(line.inventory_item_id);
     const unitId = line.amount_unit_id ?? line.unit_id ?? item.unit_id;
     if (!unitIdSet.has(unitId)) return { badUnit: true };
 
     validatedLines.push({
-      itemId: line.item_id,
+      inventoryItemId: line.inventory_item_id,
       quantity: line.quantity,
       unitId,
       fromNodeId: line.from_node_id,
@@ -287,7 +287,7 @@ router.put('/organizations/:id/inventory-movements/:movementId', (req, res) => {
           referenceType: parsed.data.reference_type,
           referenceId: parsed.data.reference_id,
           note: parsed.data.note,
-          itemId: validatedLine.itemId,
+          itemId: validatedLine.inventoryItemId,
           unitId: validatedLine.unitId,
           fromNodeId: validatedLine.fromNodeId,
           toNodeId: validatedLine.toNodeId,

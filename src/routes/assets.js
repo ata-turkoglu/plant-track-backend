@@ -614,7 +614,7 @@ router.get('/organizations/:id/assets/:assetId/bom', (req, res) => {
 });
 
 const bomCreateSchema = z.object({
-  item_group_id: z.number().int().positive(),
+  inventory_item_card_id: z.number().int().positive(),
   quantity: z.number().positive(),
   note: z.string().max(8000).optional().nullable(),
   meta_json: z.unknown().optional().nullable()
@@ -633,18 +633,18 @@ router.post('/organizations/:id/assets/:assetId/bom', (req, res) => {
       const asset = await db('assets').where({ id: assetId, organization_id: organizationId }).first(['id']);
       if (!asset) return { notFound: true };
 
-      const itemGroup = await db('item_groups as ig')
+      const inventoryItemCard = await db('inventory_item_cards as iic')
         .leftJoin({ wt: 'warehouse_types' }, function joinWarehouseType() {
-          this.on('wt.id', '=', 'ig.warehouse_type_id').andOn('wt.organization_id', '=', 'ig.organization_id');
+          this.on('wt.id', '=', 'iic.warehouse_type_id').andOn('wt.organization_id', '=', 'iic.organization_id');
         })
-        .where({ 'ig.id': parsed.data.item_group_id, 'ig.organization_id': organizationId })
-        .first(['ig.id', 'ig.amount_unit_id', 'ig.active', 'wt.code as warehouse_type_code']);
-      if (!itemGroup) return { notFoundItem: true };
-      if (!itemGroup.active) return { notFoundItem: true };
-      if (String(itemGroup.warehouse_type_code ?? '').toUpperCase() !== 'SPARE_PART') return { invalidItemType: true };
+        .where({ 'iic.id': parsed.data.inventory_item_card_id, 'iic.organization_id': organizationId })
+        .first(['iic.id', 'iic.amount_unit_id', 'iic.active', 'wt.code as warehouse_type_code']);
+      if (!inventoryItemCard) return { notFoundItem: true };
+      if (!inventoryItemCard.active) return { notFoundItem: true };
+      if (String(inventoryItemCard.warehouse_type_code ?? '').toUpperCase() !== 'SPARE_PART') return { invalidItemType: true };
 
       const conflict = await db('asset_bom_lines')
-        .where({ organization_id: organizationId, asset_id: assetId, item_group_id: parsed.data.item_group_id })
+        .where({ organization_id: organizationId, asset_id: assetId, inventory_item_card_id: parsed.data.inventory_item_card_id })
         .first(['id']);
       if (conflict) return { conflict: true };
 
@@ -652,8 +652,8 @@ router.post('/organizations/:id/assets/:assetId/bom', (req, res) => {
         createAssetBomLine(trx, {
           organizationId,
           assetId,
-          itemGroupId: parsed.data.item_group_id,
-          unitId: itemGroup.amount_unit_id,
+          inventoryItemCardId: parsed.data.inventory_item_card_id,
+          unitId: inventoryItemCard.amount_unit_id,
           quantity: parsed.data.quantity,
           note: parsed.data.note ?? null,
           metaJson: parsed.data.meta_json ?? null
@@ -664,8 +664,8 @@ router.post('/organizations/:id/assets/:assetId/bom', (req, res) => {
     })
     .then((result) => {
       if (result.notFound) return res.status(404).json({ message: 'Asset not found' });
-      if (result.notFoundItem) return res.status(404).json({ message: 'Item not found' });
-      if (result.invalidItemType) return res.status(400).json({ message: 'Only spare part item groups can be added to BOM' });
+      if (result.notFoundItem) return res.status(404).json({ message: 'Inventory item card not found' });
+      if (result.invalidItemType) return res.status(400).json({ message: 'Only spare part inventory item cards can be added to BOM' });
       if (result.conflict) return res.status(409).json({ message: 'Item already exists in BOM' });
       return res.status(201).json({ line: result.line });
     })

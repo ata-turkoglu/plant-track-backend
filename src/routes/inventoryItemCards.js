@@ -6,16 +6,16 @@ import db from '../db/knex.js';
 import { getUnitById } from '../models/units.js';
 import { getWarehouseTypeById } from '../models/warehouseTypes.js';
 import {
-  createItemGroup,
-  deleteItemGroup,
-  listItemGroupsByOrganization,
-  updateItemGroup
-} from '../models/itemGroups.js';
+  createInventoryItemCard,
+  deleteInventoryItemCard,
+  listInventoryItemCardsByOrganization,
+  updateInventoryItemCard
+} from '../models/inventoryItemCards.js';
 
 const router = Router();
 router.use('/organizations/:id', loadOrganizationContext);
 
-router.get('/organizations/:id/item-groups', (req, res) => {
+router.get('/organizations/:id/inventory-item-cards', (req, res) => {
   const organizationId = req.organizationId;
   const activeText = typeof req.query.active === 'string' ? req.query.active.trim().toLowerCase() : '';
   if (activeText && activeText !== 'true' && activeText !== 'false') {
@@ -28,9 +28,9 @@ router.get('/organizations/:id/item-groups', (req, res) => {
   const warehouseTypeCode = typeof req.query.warehouseTypeCode === 'string' ? req.query.warehouseTypeCode : undefined;
 
   return Promise.resolve()
-    .then(() => listItemGroupsByOrganization(organizationId, { active, q, warehouseTypeId, warehouseTypeCode }))
-    .then((itemGroups) => res.status(200).json({ item_groups: itemGroups }))
-    .catch(() => res.status(500).json({ message: 'Failed to fetch item groups' }));
+    .then(() => listInventoryItemCardsByOrganization(organizationId, { active, q, warehouseTypeId, warehouseTypeCode }))
+    .then((inventoryItemCards) => res.status(200).json({ inventory_item_cards: inventoryItemCards }))
+    .catch(() => res.status(500).json({ message: 'Failed to fetch inventory item cards' }));
 });
 
 const upsertSchema = z.object({
@@ -45,7 +45,7 @@ const upsertSchema = z.object({
   active: z.boolean().optional()
 });
 
-router.post('/organizations/:id/item-groups', (req, res) => {
+router.post('/organizations/:id/inventory-item-cards', (req, res) => {
   const organizationId = req.organizationId;
 
   const parsed = upsertSchema.safeParse(req.body);
@@ -55,7 +55,7 @@ router.post('/organizations/:id/item-groups', (req, res) => {
 
   return Promise.resolve()
     .then(async () => {
-      const conflict = await db('item_groups')
+      const conflict = await db('inventory_item_cards')
         .where({ organization_id: organizationId })
         .whereRaw('lower(code) = lower(?)', [parsed.data.code])
         .first(['id']);
@@ -75,8 +75,8 @@ router.post('/organizations/:id/item-groups', (req, res) => {
       const wt = await getWarehouseTypeById(parsed.data.warehouse_type_id);
       if (!wt || wt.organization_id !== organizationId) return { badWarehouseType: true };
 
-      const itemGroup = await db.transaction((trx) =>
-        createItemGroup(trx, {
+      const inventoryItemCard = await db.transaction((trx) =>
+        createInventoryItemCard(trx, {
           organizationId,
           warehouseTypeId: wt.id,
           amountUnitId: unit.id,
@@ -89,22 +89,22 @@ router.post('/organizations/:id/item-groups', (req, res) => {
         })
       );
 
-      return { itemGroup };
+      return { inventoryItemCard };
     })
     .then((result) => {
-      if (result.conflict) return res.status(409).json({ message: 'Item group code already exists' });
+      if (result.conflict) return res.status(409).json({ message: 'Inventory item card code already exists' });
       if (result.badUnit) return res.status(400).json({ message: 'Invalid unit' });
       if (result.badSizeUnit) return res.status(400).json({ message: 'Invalid size unit' });
       if (result.badWarehouseType) return res.status(400).json({ message: 'Invalid warehouse type' });
-      return res.status(201).json({ item_group: result.itemGroup });
+      return res.status(201).json({ inventory_item_card: result.inventoryItemCard });
     })
-    .catch(() => res.status(500).json({ message: 'Failed to create item group' }));
+    .catch(() => res.status(500).json({ message: 'Failed to create inventory item card' }));
 });
 
-router.put('/organizations/:id/item-groups/:itemGroupId', (req, res) => {
+router.put('/organizations/:id/inventory-item-cards/:inventoryItemCardId', (req, res) => {
   const organizationId = req.organizationId;
-  const itemGroupId = Number(req.params.itemGroupId);
-  if (!Number.isFinite(itemGroupId)) return res.status(400).json({ message: 'Invalid item group id' });
+  const inventoryItemCardId = Number(req.params.inventoryItemCardId);
+  if (!Number.isFinite(inventoryItemCardId)) return res.status(400).json({ message: 'Invalid inventory item card id' });
 
   const parsed = upsertSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -113,14 +113,14 @@ router.put('/organizations/:id/item-groups/:itemGroupId', (req, res) => {
 
   return Promise.resolve()
     .then(async () => {
-      const existing = await db('item_groups')
-        .where({ id: itemGroupId, organization_id: organizationId })
+      const existing = await db('inventory_item_cards')
+        .where({ id: inventoryItemCardId, organization_id: organizationId })
         .first(['id']);
       if (!existing) return { notFound: true };
 
-      const conflict = await db('item_groups')
+      const conflict = await db('inventory_item_cards')
         .where({ organization_id: organizationId })
-        .whereNot({ id: itemGroupId })
+        .whereNot({ id: inventoryItemCardId })
         .whereRaw('lower(code) = lower(?)', [parsed.data.code])
         .first(['id']);
       if (conflict) return { conflict: true };
@@ -139,10 +139,10 @@ router.put('/organizations/:id/item-groups/:itemGroupId', (req, res) => {
       const wt = await getWarehouseTypeById(parsed.data.warehouse_type_id);
       if (!wt || wt.organization_id !== organizationId) return { badWarehouseType: true };
 
-      const itemGroup = await db.transaction((trx) =>
-        updateItemGroup(trx, {
+      const inventoryItemCard = await db.transaction((trx) =>
+        updateInventoryItemCard(trx, {
           organizationId,
-          itemGroupId,
+          inventoryItemCardId,
           warehouseTypeId: wt.id,
           amountUnitId: unit.id,
           code: parsed.data.code,
@@ -154,58 +154,58 @@ router.put('/organizations/:id/item-groups/:itemGroupId', (req, res) => {
         })
       );
 
-      return { itemGroup };
+      return { inventoryItemCard };
     })
     .then((result) => {
-      if (result.notFound) return res.status(404).json({ message: 'Item group not found' });
-      if (result.conflict) return res.status(409).json({ message: 'Item group code already exists' });
+      if (result.notFound) return res.status(404).json({ message: 'Inventory item card not found' });
+      if (result.conflict) return res.status(409).json({ message: 'Inventory item card code already exists' });
       if (result.badUnit) return res.status(400).json({ message: 'Invalid unit' });
       if (result.badSizeUnit) return res.status(400).json({ message: 'Invalid size unit' });
       if (result.badWarehouseType) return res.status(400).json({ message: 'Invalid warehouse type' });
-      if (!result.itemGroup) return res.status(404).json({ message: 'Item group not found' });
-      return res.status(200).json({ item_group: result.itemGroup });
+      if (!result.inventoryItemCard) return res.status(404).json({ message: 'Inventory item card not found' });
+      return res.status(200).json({ inventory_item_card: result.inventoryItemCard });
     })
-    .catch(() => res.status(500).json({ message: 'Failed to update item group' }));
+    .catch(() => res.status(500).json({ message: 'Failed to update inventory item card' }));
 });
 
-router.delete('/organizations/:id/item-groups/:itemGroupId', (req, res) => {
+router.delete('/organizations/:id/inventory-item-cards/:inventoryItemCardId', (req, res) => {
   const organizationId = req.organizationId;
-  const itemGroupId = Number(req.params.itemGroupId);
-  if (!Number.isFinite(itemGroupId)) return res.status(400).json({ message: 'Invalid item group id' });
+  const inventoryItemCardId = Number(req.params.inventoryItemCardId);
+  if (!Number.isFinite(inventoryItemCardId)) return res.status(400).json({ message: 'Invalid inventory item card id' });
 
   return Promise.resolve()
     .then(async () => {
-      const existing = await db('item_groups')
-        .where({ id: itemGroupId, organization_id: organizationId })
+      const existing = await db('inventory_item_cards')
+        .where({ id: inventoryItemCardId, organization_id: organizationId })
         .first(['id']);
       if (!existing) return { notFound: true };
 
-      const usedByItems = await db('items')
-        .where({ organization_id: organizationId, item_group_id: itemGroupId })
+      const usedByItems = await db('inventory_items')
+        .where({ organization_id: organizationId, inventory_item_card_id: inventoryItemCardId })
         .first(['id']);
       if (usedByItems) return { inUse: true };
 
       const hasBomTable = await db.schema.hasTable('asset_bom_lines');
       if (hasBomTable) {
         const usedByBom = await db('asset_bom_lines')
-          .where({ organization_id: organizationId, item_group_id: itemGroupId })
+          .where({ organization_id: organizationId, inventory_item_card_id: inventoryItemCardId })
           .first(['id']);
         if (usedByBom) return { inUse: true };
       }
 
       const deletedCount = await db.transaction((trx) =>
-        deleteItemGroup(trx, { organizationId, itemGroupId })
+        deleteInventoryItemCard(trx, { organizationId, inventoryItemCardId })
       );
 
       return { deleted: deletedCount > 0 };
     })
     .then((result) => {
-      if (result.notFound) return res.status(404).json({ message: 'Item group not found' });
-      if (result.inUse) return res.status(409).json({ message: 'Item group is in use' });
-      if (!result.deleted) return res.status(404).json({ message: 'Item group not found' });
+      if (result.notFound) return res.status(404).json({ message: 'Inventory item card not found' });
+      if (result.inUse) return res.status(409).json({ message: 'Inventory item card is in use' });
+      if (!result.deleted) return res.status(404).json({ message: 'Inventory item card not found' });
       return res.status(204).send();
     })
-    .catch(() => res.status(500).json({ message: 'Failed to delete item group' }));
+    .catch(() => res.status(500).json({ message: 'Failed to delete inventory item card' }));
 });
 
 export default router;
