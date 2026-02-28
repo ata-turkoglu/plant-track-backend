@@ -41,6 +41,12 @@ npm run db:setup
 npm run dev
 ```
 
+Env config:
+- Create `backend/.env` (not committed). See `../docs/ENV.md`.
+
+Contract docs:
+- If payloads change, update `../docs/contracts/API.md`.
+
 ## Recent Backend Notes (Do Not Miss)
 
 - `items`:

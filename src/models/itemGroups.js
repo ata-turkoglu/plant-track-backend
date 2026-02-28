@@ -7,6 +7,7 @@ const ITEM_GROUP_COLUMNS = [
   'amount_unit_id',
   'code',
   'name',
+  'type_spec',
   'size_spec',
   'size_unit_id',
   'active',
@@ -32,6 +33,7 @@ export async function listItemGroupsByOrganization(organizationId, { active, q, 
       b
         .whereRaw('code ilike ?', [`%${qText}%`])
         .orWhereRaw('name ilike ?', [`%${qText}%`])
+        .orWhereRaw('type_spec ilike ?', [`%${qText}%`])
         .orWhereRaw('size_spec ilike ?', [`%${qText}%`])
     );
   }
@@ -61,7 +63,7 @@ export async function getItemGroupById(id) {
 
 export async function createItemGroup(
   trx,
-  { organizationId, warehouseTypeId, amountUnitId, code, name, sizeSpec, sizeUnitId, active }
+  { organizationId, warehouseTypeId, amountUnitId, code, name, typeSpec, sizeSpec, sizeUnitId, active }
 ) {
   const rows = await trx('item_groups')
     .insert({
@@ -70,6 +72,7 @@ export async function createItemGroup(
       amount_unit_id: amountUnitId,
       code,
       name,
+      type_spec: typeSpec ?? null,
       size_spec: sizeSpec ?? null,
       size_unit_id: sizeUnitId ?? null,
       active: active ?? true
@@ -86,7 +89,7 @@ export async function createItemGroup(
 
 export async function updateItemGroup(
   trx,
-  { organizationId, itemGroupId, warehouseTypeId, amountUnitId, code, name, sizeSpec, sizeUnitId, active }
+  { organizationId, itemGroupId, warehouseTypeId, amountUnitId, code, name, typeSpec, sizeSpec, sizeUnitId, active }
 ) {
   const rows = await trx('item_groups')
     .where({ id: itemGroupId, organization_id: organizationId })
@@ -95,6 +98,7 @@ export async function updateItemGroup(
       amount_unit_id: amountUnitId,
       code,
       name,
+      type_spec: typeSpec ?? null,
       size_spec: sizeSpec ?? null,
       size_unit_id: sizeUnitId ?? null,
       active: active ?? true,

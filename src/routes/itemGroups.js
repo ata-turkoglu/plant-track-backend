@@ -39,6 +39,7 @@ const upsertSchema = z.object({
   unit_id: z.number().int().positive().optional(),
   code: z.string().trim().min(1).max(64),
   name: z.string().trim().min(1).max(255),
+  type_spec: z.string().trim().max(255).optional().nullable(),
   size_spec: z.string().trim().max(255).optional().nullable(),
   size_unit_id: z.number().int().positive().optional().nullable(),
   active: z.boolean().optional()
@@ -81,6 +82,7 @@ router.post('/organizations/:id/item-groups', (req, res) => {
           amountUnitId: unit.id,
           code: parsed.data.code,
           name: parsed.data.name,
+          typeSpec: parsed.data.type_spec?.trim() || null,
           sizeSpec: parsed.data.size_spec?.trim() || null,
           sizeUnitId: parsed.data.size_unit_id ?? null,
           active: parsed.data.active ?? true
@@ -145,6 +147,7 @@ router.put('/organizations/:id/item-groups/:itemGroupId', (req, res) => {
           amountUnitId: unit.id,
           code: parsed.data.code,
           name: parsed.data.name,
+          typeSpec: parsed.data.type_spec?.trim() || null,
           sizeSpec: parsed.data.size_spec?.trim() || null,
           sizeUnitId: parsed.data.size_unit_id ?? null,
           active: parsed.data.active ?? true
