@@ -2,8 +2,8 @@ import { Router } from 'express';
 import { z } from 'zod';
 
 import db from '../db/knex.js';
-import { createFirm, deleteFirm, findFirmConflict, listFirmsByOrganization, updateFirm } from '../models/firms.js';
-import { deleteRefNode, upsertRefNode } from '../models/nodes.js';
+import { createFirm, deleteFirm, findFirmConflict, getFirmById, listFirmsByOrganization, updateFirm } from '../models/firms.js';
+import { deleteRefNode, findNodeByRef, upsertRefNode } from '../models/nodes.js';
 import { loadOrganizationContext } from '../middleware/organizationContext.js';
 
 const router = Router();
@@ -31,6 +31,24 @@ const upsertSchema = z.object({
   active: z.boolean().optional()
 });
 
+function buildFirmNodeMeta(firm) {
+  return {
+    active: firm.active,
+    email: firm.email ?? null,
+    phone: firm.phone ?? null
+  };
+}
+
+function getConflictResponse(conflict, payload) {
+  if (!conflict) return null;
+  if (String(conflict.name).toLowerCase() === String(payload.name).toLowerCase()) return { conflict: true };
+  if (payload.email && conflict.email && String(conflict.email).toLowerCase() === String(payload.email).toLowerCase()) {
+    return { conflictEmail: true };
+  }
+  if (payload.phone && conflict.phone && String(conflict.phone) === String(payload.phone)) return { conflictPhone: true };
+  return null;
+}
+
 router.post('/organizations/:id/firms', (req, res) => {
   const organizationId = req.organizationId;
 
@@ -46,13 +64,8 @@ router.post('/organizations/:id/firms', (req, res) => {
         email: parsed.data.email ?? undefined,
         phone: parsed.data.phone ?? undefined
       });
-      if (conflict) {
-        if (String(conflict.name).toLowerCase() === String(parsed.data.name).toLowerCase()) return { conflict: true };
-        if (parsed.data.email && conflict.email && String(conflict.email).toLowerCase() === String(parsed.data.email).toLowerCase()) {
-          return { conflictEmail: true };
-        }
-        if (parsed.data.phone && conflict.phone && String(conflict.phone) === String(parsed.data.phone)) return { conflictPhone: true };
-      }
+      const conflictResult = getConflictResponse(conflict, parsed.data);
+      if (conflictResult) return conflictResult;
 
       const firm = await db.transaction(async (trx) =>
         createFirm(trx, {
@@ -73,11 +86,7 @@ router.post('/organizations/:id/firms', (req, res) => {
             refId: created.id,
             name: created.name,
             isStocked: false,
-            metaJson: {
-              active: created.active,
-              email: created.email ?? null,
-              phone: created.phone ?? null
-            }
+            metaJson: buildFirmNodeMeta(created)
           });
           return created;
         })
@@ -106,8 +115,8 @@ router.put('/organizations/:id/firms/:firmId', (req, res) => {
 
   return Promise.resolve()
     .then(async () => {
-      const existing = await db('firms').where({ id: firmId, organization_id: organizationId }).first(['id']);
-      if (!existing) return { notFoundFirm: true };
+      const existing = await getFirmById(firmId);
+      if (!existing || existing.organization_id !== organizationId) return { notFoundFirm: true };
 
       const conflict = await findFirmConflict(organizationId, {
         name: parsed.data.name,
@@ -115,13 +124,8 @@ router.put('/organizations/:id/firms/:firmId', (req, res) => {
         phone: parsed.data.phone ?? undefined,
         excludeId: firmId
       });
-      if (conflict) {
-        if (String(conflict.name).toLowerCase() === String(parsed.data.name).toLowerCase()) return { conflict: true };
-        if (parsed.data.email && conflict.email && String(conflict.email).toLowerCase() === String(parsed.data.email).toLowerCase()) {
-          return { conflictEmail: true };
-        }
-        if (parsed.data.phone && conflict.phone && String(conflict.phone) === String(parsed.data.phone)) return { conflictPhone: true };
-      }
+      const conflictResult = getConflictResponse(conflict, parsed.data);
+      if (conflictResult) return conflictResult;
 
       const firm = await db.transaction(async (trx) =>
         updateFirm(trx, {
@@ -144,11 +148,7 @@ router.put('/organizations/:id/firms/:firmId', (req, res) => {
             refId: updated.id,
             name: updated.name,
             isStocked: false,
-            metaJson: {
-              active: updated.active,
-              email: updated.email ?? null,
-              phone: updated.phone ?? null
-            }
+            metaJson: buildFirmNodeMeta(updated)
           });
           return updated;
         })
@@ -174,10 +174,20 @@ router.delete('/organizations/:id/firms/:firmId', (req, res) => {
 
   return Promise.resolve()
     .then(async () => {
-      const existing = await db('firms').where({ id: firmId, organization_id: organizationId }).first(['id']);
-      if (!existing) return { notFoundFirm: true };
+      const existing = await getFirmById(firmId);
+      if (!existing || existing.organization_id !== organizationId) return { notFoundFirm: true };
 
       const deleted = await db.transaction(async (trx) => {
+        const node = await findNodeByRef(organizationId, 'FIRM', 'firms', firmId);
+        if (node) {
+          const linkedMovement = await trx('inventory_movement_lines')
+            .where((qb) => qb.where({ from_node_id: node.id }).orWhere({ to_node_id: node.id }))
+            .first(['id']);
+          if (linkedMovement) {
+            throw Object.assign(new Error('FIRM_NODE_IN_USE'), { code: 'FIRM_NODE_IN_USE' });
+          }
+        }
+
         const removed = await deleteFirm(trx, { organizationId, firmId });
         if (removed) {
           await deleteRefNode(trx, {
@@ -196,8 +206,12 @@ router.delete('/organizations/:id/firms/:firmId', (req, res) => {
       if (result.notFoundFirm) return res.status(404).json({ message: 'Firm not found' });
       return res.status(204).send();
     })
-    .catch(() => res.status(500).json({ message: 'Failed to delete firm' }));
+    .catch((err) => {
+      if (err?.code === 'FIRM_NODE_IN_USE') {
+        return res.status(409).json({ message: 'Firm is used in inventory movements and cannot be deleted.' });
+      }
+      return res.status(500).json({ message: 'Failed to delete firm' });
+    });
 });
 
 export default router;
-

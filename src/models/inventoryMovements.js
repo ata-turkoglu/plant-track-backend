@@ -28,6 +28,7 @@ export async function listMovementsByOrganization(organizationId, limit = 100) {
       'l.organization_id',
       db.raw('e.id::text as movement_group_id'),
       'l.inventory_item_id',
+      'l.amount_unit_id',
       db.raw('e.event_type as movement_type'),
       'l.quantity',
       'l.unit_price',
