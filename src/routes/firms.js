@@ -2,31 +2,25 @@ import { Router } from 'express';
 import { z } from 'zod';
 
 import db from '../db/knex.js';
-import {
-  listCustomersByOrganization,
-  createCustomer,
-  updateCustomer,
-  deleteCustomer,
-  findCustomerConflict
-} from '../models/customers.js';
-import { upsertRefNode, deleteRefNode } from '../models/nodes.js';
+import { createFirm, deleteFirm, findFirmConflict, listFirmsByOrganization, updateFirm } from '../models/firms.js';
+import { deleteRefNode, upsertRefNode } from '../models/nodes.js';
 import { loadOrganizationContext } from '../middleware/organizationContext.js';
 
 const router = Router();
 router.use('/organizations/:id', loadOrganizationContext);
 
-router.get('/organizations/:id/customers', (req, res) => {
+router.get('/organizations/:id/firms', (req, res) => {
   const organizationId = req.organizationId;
 
   return Promise.resolve()
-    .then(() => listCustomersByOrganization(organizationId))
-    .then((customers) => {
-      return res.status(200).json({ customers });
+    .then(() => listFirmsByOrganization(organizationId))
+    .then((firms) => {
+      return res.status(200).json({ firms });
     })
-    .catch(() => res.status(500).json({ message: 'Failed to fetch customers' }));
+    .catch(() => res.status(500).json({ message: 'Failed to fetch firms' }));
 });
 
-const createSchema = z.object({
+const upsertSchema = z.object({
   name: z.string().min(1).max(255),
   email: z.string().email().max(255).optional().nullable(),
   phone: z.string().max(64).optional().nullable(),
@@ -37,17 +31,17 @@ const createSchema = z.object({
   active: z.boolean().optional()
 });
 
-router.post('/organizations/:id/customers', (req, res) => {
+router.post('/organizations/:id/firms', (req, res) => {
   const organizationId = req.organizationId;
 
-  const parsed = createSchema.safeParse(req.body);
+  const parsed = upsertSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: 'Validation failed', errors: parsed.error.flatten() });
   }
 
   return Promise.resolve()
     .then(async () => {
-      const conflict = await findCustomerConflict(organizationId, {
+      const conflict = await findFirmConflict(organizationId, {
         name: parsed.data.name,
         email: parsed.data.email ?? undefined,
         phone: parsed.data.phone ?? undefined
@@ -60,8 +54,8 @@ router.post('/organizations/:id/customers', (req, res) => {
         if (parsed.data.phone && conflict.phone && String(conflict.phone) === String(parsed.data.phone)) return { conflictPhone: true };
       }
 
-      const customer = await db.transaction(async (trx) =>
-        createCustomer(trx, {
+      const firm = await db.transaction(async (trx) =>
+        createFirm(trx, {
           organizationId,
           name: parsed.data.name,
           email: parsed.data.email ?? null,
@@ -74,8 +68,8 @@ router.post('/organizations/:id/customers', (req, res) => {
         }).then(async (created) => {
           await upsertRefNode(trx, {
             organizationId,
-            nodeType: 'CUSTOMER',
-            refTable: 'customers',
+            nodeType: 'FIRM',
+            refTable: 'firms',
             refId: created.id,
             name: created.name,
             isStocked: false,
@@ -89,48 +83,37 @@ router.post('/organizations/:id/customers', (req, res) => {
         })
       );
 
-      return { customer };
+      return { firm };
     })
     .then((result) => {
-      if (result.conflict) return res.status(409).json({ message: 'Customer already exists' });
-      if (result.conflictEmail) return res.status(409).json({ message: 'Customer email already exists' });
-      if (result.conflictPhone) return res.status(409).json({ message: 'Customer phone already exists' });
-      return res.status(201).json({ customer: result.customer });
+      if (result.conflict) return res.status(409).json({ message: 'Firm already exists' });
+      if (result.conflictEmail) return res.status(409).json({ message: 'Firm email already exists' });
+      if (result.conflictPhone) return res.status(409).json({ message: 'Firm phone already exists' });
+      return res.status(201).json({ firm: result.firm });
     })
-    .catch(() => res.status(500).json({ message: 'Failed to create customer' }));
+    .catch(() => res.status(500).json({ message: 'Failed to create firm' }));
 });
 
-const updateSchema = z.object({
-  name: z.string().min(1).max(255),
-  email: z.string().email().max(255).optional().nullable(),
-  phone: z.string().max(64).optional().nullable(),
-  address: z.string().max(4000).optional().nullable(),
-  tax_no: z.string().max(64).optional().nullable(),
-  contact_name: z.string().max(255).optional().nullable(),
-  notes: z.string().max(8000).optional().nullable(),
-  active: z.boolean().optional()
-});
-
-router.put('/organizations/:id/customers/:customerId', (req, res) => {
+router.put('/organizations/:id/firms/:firmId', (req, res) => {
   const organizationId = req.organizationId;
-  const customerId = Number(req.params.customerId);
-  if (!Number.isFinite(customerId)) return res.status(400).json({ message: 'Invalid customer id' });
+  const firmId = Number(req.params.firmId);
+  if (!Number.isFinite(firmId)) return res.status(400).json({ message: 'Invalid firm id' });
 
-  const parsed = updateSchema.safeParse(req.body);
+  const parsed = upsertSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: 'Validation failed', errors: parsed.error.flatten() });
   }
 
   return Promise.resolve()
     .then(async () => {
-      const existing = await db('customers').where({ id: customerId, organization_id: organizationId }).first(['id']);
-      if (!existing) return { notFoundCustomer: true };
+      const existing = await db('firms').where({ id: firmId, organization_id: organizationId }).first(['id']);
+      if (!existing) return { notFoundFirm: true };
 
-      const conflict = await findCustomerConflict(organizationId, {
+      const conflict = await findFirmConflict(organizationId, {
         name: parsed.data.name,
         email: parsed.data.email ?? undefined,
         phone: parsed.data.phone ?? undefined,
-        excludeId: customerId
+        excludeId: firmId
       });
       if (conflict) {
         if (String(conflict.name).toLowerCase() === String(parsed.data.name).toLowerCase()) return { conflict: true };
@@ -140,10 +123,10 @@ router.put('/organizations/:id/customers/:customerId', (req, res) => {
         if (parsed.data.phone && conflict.phone && String(conflict.phone) === String(parsed.data.phone)) return { conflictPhone: true };
       }
 
-      const customer = await db.transaction(async (trx) =>
-        updateCustomer(trx, {
+      const firm = await db.transaction(async (trx) =>
+        updateFirm(trx, {
           organizationId,
-          customerId,
+          firmId,
           name: parsed.data.name,
           email: parsed.data.email ?? null,
           phone: parsed.data.phone ?? null,
@@ -156,8 +139,8 @@ router.put('/organizations/:id/customers/:customerId', (req, res) => {
           if (!updated) return null;
           await upsertRefNode(trx, {
             organizationId,
-            nodeType: 'CUSTOMER',
-            refTable: 'customers',
+            nodeType: 'FIRM',
+            refTable: 'firms',
             refId: updated.id,
             name: updated.name,
             isStocked: false,
@@ -171,49 +154,50 @@ router.put('/organizations/:id/customers/:customerId', (req, res) => {
         })
       );
 
-      return { customer };
+      return { firm };
     })
     .then((result) => {
-      if (result.notFoundCustomer) return res.status(404).json({ message: 'Customer not found' });
-      if (result.conflict) return res.status(409).json({ message: 'Customer already exists' });
-      if (result.conflictEmail) return res.status(409).json({ message: 'Customer email already exists' });
-      if (result.conflictPhone) return res.status(409).json({ message: 'Customer phone already exists' });
-      if (!result.customer) return res.status(404).json({ message: 'Customer not found' });
-      return res.status(200).json({ customer: result.customer });
+      if (result.notFoundFirm) return res.status(404).json({ message: 'Firm not found' });
+      if (result.conflict) return res.status(409).json({ message: 'Firm already exists' });
+      if (result.conflictEmail) return res.status(409).json({ message: 'Firm email already exists' });
+      if (result.conflictPhone) return res.status(409).json({ message: 'Firm phone already exists' });
+      if (!result.firm) return res.status(404).json({ message: 'Firm not found' });
+      return res.status(200).json({ firm: result.firm });
     })
-    .catch(() => res.status(500).json({ message: 'Failed to update customer' }));
+    .catch(() => res.status(500).json({ message: 'Failed to update firm' }));
 });
 
-router.delete('/organizations/:id/customers/:customerId', (req, res) => {
+router.delete('/organizations/:id/firms/:firmId', (req, res) => {
   const organizationId = req.organizationId;
-  const customerId = Number(req.params.customerId);
-  if (!Number.isFinite(customerId)) return res.status(400).json({ message: 'Invalid customer id' });
+  const firmId = Number(req.params.firmId);
+  if (!Number.isFinite(firmId)) return res.status(400).json({ message: 'Invalid firm id' });
 
   return Promise.resolve()
     .then(async () => {
-      const existing = await db('customers').where({ id: customerId, organization_id: organizationId }).first(['id']);
-      if (!existing) return { notFoundCustomer: true };
+      const existing = await db('firms').where({ id: firmId, organization_id: organizationId }).first(['id']);
+      if (!existing) return { notFoundFirm: true };
 
       const deleted = await db.transaction(async (trx) => {
-        const removed = await deleteCustomer(trx, { organizationId, customerId });
+        const removed = await deleteFirm(trx, { organizationId, firmId });
         if (removed) {
           await deleteRefNode(trx, {
             organizationId,
-            nodeType: 'CUSTOMER',
-            refTable: 'customers',
-            refId: customerId
+            nodeType: 'FIRM',
+            refTable: 'firms',
+            refId: firmId
           });
         }
         return removed;
       });
-      if (!deleted) return { notFoundCustomer: true };
+      if (!deleted) return { notFoundFirm: true };
       return { ok: true };
     })
     .then((result) => {
-      if (result.notFoundCustomer) return res.status(404).json({ message: 'Customer not found' });
+      if (result.notFoundFirm) return res.status(404).json({ message: 'Firm not found' });
       return res.status(204).send();
     })
-    .catch(() => res.status(500).json({ message: 'Failed to delete customer' }));
+    .catch(() => res.status(500).json({ message: 'Failed to delete firm' }));
 });
 
 export default router;
+

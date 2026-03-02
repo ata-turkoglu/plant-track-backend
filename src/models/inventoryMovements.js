@@ -30,6 +30,8 @@ export async function listMovementsByOrganization(organizationId, limit = 100) {
       'l.inventory_item_id',
       db.raw('e.event_type as movement_type'),
       'l.quantity',
+      'l.unit_price',
+      'l.currency_code',
       db.raw('u.code as uom'),
       'e.reference_type',
       'e.reference_id',
@@ -85,7 +87,9 @@ export async function createMovementEvent(
         amount_unit_id: line.unitId,
         from_node_id: line.fromNodeId,
         to_node_id: line.toNodeId,
-        quantity: line.quantity
+        quantity: line.quantity,
+        unit_price: line.unitPrice ?? null,
+        currency_code: line.currencyCode ?? null
       }))
     )
     .returning([
@@ -97,7 +101,9 @@ export async function createMovementEvent(
       'amount_unit_id',
       'from_node_id',
       'to_node_id',
-      'quantity'
+      'quantity',
+      'unit_price',
+      'currency_code'
     ]);
 
   return { event, lines: lineRows };
@@ -117,6 +123,8 @@ export async function getMovementLineById(organizationId, lineId) {
       'l.from_node_id',
       'l.to_node_id',
       'l.quantity',
+      'l.unit_price',
+      'l.currency_code',
       'e.status',
       'e.event_type',
       'e.reference_type',
@@ -140,7 +148,9 @@ export async function updateDraftMovementLine(
     unitId,
     fromNodeId,
     toNodeId,
-    quantity
+    quantity,
+    unitPrice,
+    currencyCode
   }
 ) {
   const existing = await trx('inventory_movement_lines')
@@ -171,6 +181,8 @@ export async function updateDraftMovementLine(
       from_node_id: fromNodeId,
       to_node_id: toNodeId,
       quantity,
+      unit_price: unitPrice ?? null,
+      currency_code: currencyCode ?? null,
       updated_at: trx.fn.now()
     })
     .returning([
@@ -181,7 +193,9 @@ export async function updateDraftMovementLine(
       'amount_unit_id',
       'from_node_id',
       'to_node_id',
-      'quantity'
+      'quantity',
+      'unit_price',
+      'currency_code'
     ]);
 
   return { line: lineRows[0] };

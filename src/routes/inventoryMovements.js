@@ -20,7 +20,9 @@ const lineSchema = z.object({
   quantity: z.number().positive(),
   amount_unit_id: z.number().int().positive(),
   from_node_id: z.number().int().positive(),
-  to_node_id: z.number().int().positive()
+  to_node_id: z.number().int().positive(),
+  unit_price: z.number().positive().optional().nullable(),
+  currency_code: z.string().trim().min(1).max(8).optional().nullable()
 });
 
 const createSchema = z.object({
@@ -35,7 +37,9 @@ const createSchema = z.object({
   quantity: z.number().positive().optional(),
   amount_unit_id: z.number().int().positive().optional(),
   from_node_id: z.number().int().positive().optional(),
-  to_node_id: z.number().int().positive().optional()
+  to_node_id: z.number().int().positive().optional(),
+  unit_price: z.number().positive().optional().nullable(),
+  currency_code: z.string().trim().min(1).max(8).optional().nullable()
 });
 
 const updateSchema = createSchema;
@@ -50,7 +54,9 @@ function normalizeLines(payload) {
         quantity: payload.quantity,
         amount_unit_id: payload.amount_unit_id,
         from_node_id: payload.from_node_id,
-        to_node_id: payload.to_node_id
+        to_node_id: payload.to_node_id,
+        unit_price: payload.unit_price,
+        currency_code: payload.currency_code
       }
     ];
   }
@@ -58,7 +64,20 @@ function normalizeLines(payload) {
   return [];
 }
 
-async function validateLineInputs(organizationId, lines) {
+function normalizeMovementType(raw) {
+  const value = String(raw ?? '').trim().toUpperCase();
+  if (!value) return 'TRANSFER';
+  if (value === 'MOVE') return 'TRANSFER';
+  return value;
+}
+
+async function validateLineInputs(organizationId, eventTypeRaw, lines) {
+  const eventType = normalizeMovementType(eventTypeRaw);
+  const requiresCommercial = eventType === 'PURCHASE' || eventType === 'SALE';
+  const allowFirmFrom = eventType === 'PURCHASE';
+  const allowFirmTo = eventType === 'SALE';
+  const internalNodeTypes = new Set(['WAREHOUSE', 'LOCATION', 'VIRTUAL']);
+
   for (const line of lines) {
     if (line.from_node_id === line.to_node_id) return { sameNode: true };
   }
@@ -72,20 +91,41 @@ async function validateLineInputs(organizationId, lines) {
     db('nodes')
       .where({ organization_id: organizationId })
       .whereIn('id', nodeIds)
-      .select(['id']),
+      .select(['id', 'node_type']),
     db('inventory_items')
       .where({ organization_id: organizationId })
       .whereIn('id', itemIds)
       .select(['id', 'amount_unit_id'])
   ]);
 
-  const nodeIdSet = new Set(nodes.map((row) => row.id));
+  const nodeById = new Map(nodes.map((row) => [row.id, row]));
   const itemMap = new Map(items.map((row) => [row.id, row]));
 
   const requiredUnitIds = new Set();
   for (const line of lines) {
-    if (!nodeIdSet.has(line.from_node_id)) return { badFromNode: true };
-    if (!nodeIdSet.has(line.to_node_id)) return { badToNode: true };
+    const fromNode = nodeById.get(line.from_node_id);
+    if (!fromNode) return { badFromNode: true };
+    const toNode = nodeById.get(line.to_node_id);
+    if (!toNode) return { badToNode: true };
+
+    if (requiresCommercial) {
+      const currency = typeof line.currency_code === 'string' ? line.currency_code.trim().toUpperCase() : '';
+      if (!currency) return { badCurrency: true };
+      if (!Number.isFinite(line.unit_price) || Number(line.unit_price) <= 0) return { badUnitPrice: true };
+    }
+
+    if (eventType === 'PURCHASE') {
+      if (fromNode.node_type !== 'FIRM') return { badFromNodeType: true };
+      if (!internalNodeTypes.has(String(toNode.node_type ?? '').toUpperCase())) return { badToNodeType: true };
+    }
+    if (eventType === 'SALE') {
+      if (!internalNodeTypes.has(String(fromNode.node_type ?? '').toUpperCase())) return { badFromNodeType: true };
+      if (toNode.node_type !== 'FIRM') return { badToNodeType: true };
+    }
+    if (eventType === 'TRANSFER') {
+      if (!internalNodeTypes.has(String(fromNode.node_type ?? '').toUpperCase())) return { badFromNodeType: true };
+      if (!internalNodeTypes.has(String(toNode.node_type ?? '').toUpperCase())) return { badToNodeType: true };
+    }
 
     const item = itemMap.get(line.inventory_item_id);
     if (!item) return { badItem: true };
@@ -110,7 +150,9 @@ async function validateLineInputs(organizationId, lines) {
       quantity: line.quantity,
       unitId,
       fromNodeId: line.from_node_id,
-      toNodeId: line.to_node_id
+      toNodeId: line.to_node_id,
+      unitPrice: requiresCommercial ? Number(line.unit_price) : null,
+      currencyCode: requiresCommercial ? String(line.currency_code ?? '').trim().toUpperCase() : null
     });
   }
 
@@ -192,20 +234,24 @@ router.post('/organizations/:id/inventory-movements', (req, res) => {
 
   return Promise.resolve()
     .then(async () => {
-      const valid = await validateLineInputs(organizationId, linesInput);
+      const eventType = parsed.data.event_type ?? 'TRANSFER';
+      const valid = await validateLineInputs(organizationId, eventType, linesInput);
       if (valid.sameNode) return { sameNode: true };
       if (valid.badFromNode) return { badFromNode: true };
       if (valid.badToNode) return { badToNode: true };
       if (valid.badItem) return { badItem: true };
       if (valid.badUnit) return { badUnit: true };
+      if (valid.badCurrency) return { badCurrency: true };
+      if (valid.badUnitPrice) return { badUnitPrice: true };
+      if (valid.badFromNodeType) return { badFromNodeType: true };
+      if (valid.badToNodeType) return { badToNodeType: true };
 
-      const eventType = parsed.data.event_type ?? 'MOVE';
       const occurredAt = parsed.data.occurred_at ? new Date(parsed.data.occurred_at) : undefined;
 
       const created = await db.transaction(async (trx) =>
         createMovementEvent(trx, {
           organizationId,
-          eventType,
+          eventType: normalizeMovementType(eventType),
           status: 'DRAFT',
           occurredAt,
           referenceType: parsed.data.reference_type,
@@ -223,6 +269,9 @@ router.post('/organizations/:id/inventory-movements', (req, res) => {
       if (result.badToNode) return res.status(400).json({ message: 'Invalid to node' });
       if (result.badItem) return res.status(400).json({ message: 'Invalid item' });
       if (result.badUnit) return res.status(400).json({ message: 'Invalid unit' });
+      if (result.badCurrency) return res.status(400).json({ message: 'Invalid currency code' });
+      if (result.badUnitPrice) return res.status(400).json({ message: 'Invalid unit price' });
+      if (result.badFromNodeType || result.badToNodeType) return res.status(400).json({ message: 'Invalid movement nodes for event type' });
       if (result.sameNode) return res.status(400).json({ message: 'From and to node cannot be same' });
       // eslint-disable-next-line no-console
       console.info('[inventory-movements:create]', {
@@ -264,15 +313,19 @@ router.put('/organizations/:id/inventory-movements/:movementId', (req, res) => {
       const existing = await getMovementLineById(organizationId, movementId);
       if (!existing) return { notFoundMovement: true };
 
-      const valid = await validateLineInputs(organizationId, linesInput);
+      const eventType = normalizeMovementType(parsed.data.event_type ?? existing.event_type);
+      const valid = await validateLineInputs(organizationId, eventType, linesInput);
       if (valid.sameNode) return { sameNode: true };
       if (valid.badFromNode) return { badFromNode: true };
       if (valid.badToNode) return { badToNode: true };
       if (valid.badItem) return { badItem: true };
       if (valid.badUnit) return { badUnit: true };
+      if (valid.badCurrency) return { badCurrency: true };
+      if (valid.badUnitPrice) return { badUnitPrice: true };
+      if (valid.badFromNodeType) return { badFromNodeType: true };
+      if (valid.badToNodeType) return { badToNodeType: true };
       const validatedLine = valid.lines[0];
 
-      const eventType = parsed.data.event_type ?? existing.event_type;
       const occurredAt = parsed.data.occurred_at ? new Date(parsed.data.occurred_at) : new Date(existing.occurred_at);
 
       const updated = await db.transaction(async (trx) =>
@@ -288,7 +341,9 @@ router.put('/organizations/:id/inventory-movements/:movementId', (req, res) => {
           unitId: validatedLine.unitId,
           fromNodeId: validatedLine.fromNodeId,
           toNodeId: validatedLine.toNodeId,
-          quantity: validatedLine.quantity
+          quantity: validatedLine.quantity,
+          unitPrice: validatedLine.unitPrice,
+          currencyCode: validatedLine.currencyCode
         })
       );
 
@@ -300,6 +355,9 @@ router.put('/organizations/:id/inventory-movements/:movementId', (req, res) => {
       if (result.badToNode) return res.status(400).json({ message: 'Invalid to node' });
       if (result.badItem) return res.status(400).json({ message: 'Invalid item' });
       if (result.badUnit) return res.status(400).json({ message: 'Invalid unit' });
+      if (result.badCurrency) return res.status(400).json({ message: 'Invalid currency code' });
+      if (result.badUnitPrice) return res.status(400).json({ message: 'Invalid unit price' });
+      if (result.badFromNodeType || result.badToNodeType) return res.status(400).json({ message: 'Invalid movement nodes for event type' });
       if (result.sameNode) return res.status(400).json({ message: 'From and to node cannot be same' });
       if (result.immutable) return res.status(409).json({ message: 'Posted/Canceled movement is immutable' });
       if (!result?.line) return res.status(404).json({ message: 'Movement not found' });

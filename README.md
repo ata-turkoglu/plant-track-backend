@@ -6,6 +6,7 @@ This file is for AI agents working in backend scope (`backend/`).
 
 - Cross-scope agent guide: [`../README.md`](../README.md)
 - Project overview: [`../README.md`](../README.md)
+- Skill workflow (optional): [`SKILL.md`](SKILL.md)
 
 ## First Read (Required)
 
@@ -20,7 +21,7 @@ Before backend changes, read schema doc first and align route/model behavior wit
   - `inventory_movement_events` (header)
   - `inventory_movement_lines` (lines)
 - Unified stock endpoints:
-  - `nodes` table (`WAREHOUSE`, `LOCATION`, `SUPPLIER`, `CUSTOMER`, `ASSET`, `VIRTUAL`)
+  - `nodes` table (`WAREHOUSE`, `LOCATION`, `FIRM`, `ASSET`, `VIRTUAL`)
 - Balances:
   - computed from `POSTED` events only
   - `SUM(incoming) - SUM(outgoing)` by node/item
@@ -58,7 +59,7 @@ Contract docs:
 - `units`:
   - unit translation and symbol translation records must stay in sync with unit create/update flows.
   - `unit_symbol` translation key now uses unit code mapping (not raw symbol key).
-- `suppliers/customers`:
+- `firms`:
   - corresponding `nodes` records must be created/updated/deleted together in transactional flow.
 - `inventory movements`:
   - use event + lines model, node ids are required for movements.

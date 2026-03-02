@@ -1,7 +1,7 @@
 import db from '../db/knex.js';
 
-export async function listCustomersByOrganization(organizationId) {
-  return db('customers')
+export async function listFirmsByOrganization(organizationId) {
+  return db('firms')
     .where({ organization_id: organizationId })
     .orderBy([{ column: 'name', order: 'asc' }])
     .select([
@@ -20,8 +20,8 @@ export async function listCustomersByOrganization(organizationId) {
     ]);
 }
 
-export async function getCustomerById(id) {
-  return db('customers')
+export async function getFirmById(id) {
+  return db('firms')
     .where({ id })
     .first([
       'id',
@@ -39,8 +39,8 @@ export async function getCustomerById(id) {
     ]);
 }
 
-export async function createCustomer(trx, { organizationId, name, email, phone, address, taxNo, contactName, notes, active }) {
-  const rows = await trx('customers')
+export async function createFirm(trx, { organizationId, name, email, phone, address, taxNo, contactName, notes, active }) {
+  const rows = await trx('firms')
     .insert({
       organization_id: organizationId,
       name,
@@ -70,12 +70,9 @@ export async function createCustomer(trx, { organizationId, name, email, phone, 
   return rows[0];
 }
 
-export async function updateCustomer(
-  trx,
-  { organizationId, customerId, name, email, phone, address, taxNo, contactName, notes, active }
-) {
-  const rows = await trx('customers')
-    .where({ id: customerId, organization_id: organizationId })
+export async function updateFirm(trx, { organizationId, firmId, name, email, phone, address, taxNo, contactName, notes, active }) {
+  const rows = await trx('firms')
+    .where({ id: firmId, organization_id: organizationId })
     .update({
       name,
       email: email ?? null,
@@ -105,13 +102,13 @@ export async function updateCustomer(
   return rows[0] ?? null;
 }
 
-export async function deleteCustomer(trx, { organizationId, customerId }) {
-  const rows = await trx('customers').where({ id: customerId, organization_id: organizationId }).del().returning(['id']);
+export async function deleteFirm(trx, { organizationId, firmId }) {
+  const rows = await trx('firms').where({ id: firmId, organization_id: organizationId }).del().returning(['id']);
   return rows[0] ?? null;
 }
 
-export async function findCustomerConflict(organizationId, { name, email, phone, excludeId } = {}) {
-  const query = db('customers').where({ organization_id: organizationId });
+export async function findFirmConflict(organizationId, { name, email, phone, excludeId } = {}) {
+  const query = db('firms').where({ organization_id: organizationId });
   if (excludeId) query.whereNot({ id: excludeId });
 
   const checks = [];
@@ -132,3 +129,4 @@ export async function findCustomerConflict(organizationId, { name, email, phone,
 
   return query.first(['id', 'name', 'email', 'phone']);
 }
+
