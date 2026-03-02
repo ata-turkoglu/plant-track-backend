@@ -5,7 +5,6 @@ export async function listAssetBomLines(organizationId, assetId) {
     .where({ 'abl.organization_id': organizationId, 'abl.asset_id': assetId })
     .join('inventory_item_cards as iic', 'abl.inventory_item_card_id', 'iic.id')
     .join('units as u', 'abl.unit_id', 'u.id')
-    .leftJoin({ su: 'units' }, 'iic.size_unit_id', 'su.id')
     .select([
       'abl.id',
       'abl.organization_id',
@@ -19,11 +18,8 @@ export async function listAssetBomLines(organizationId, assetId) {
       'abl.updated_at',
       'iic.code as inventory_item_card_code',
       'iic.name as inventory_item_card_name',
-      'iic.size_spec as inventory_item_card_size_spec',
-      'iic.size_unit_id as inventory_item_card_size_unit_id',
-      'su.code as inventory_item_card_size_unit_code',
-      'su.name as inventory_item_card_size_unit_name',
-      'su.symbol as inventory_item_card_size_unit_symbol',
+      'iic.specification as inventory_item_card_specification',
+      'iic.type_name as inventory_item_card_type_name',
       'u.code as unit_code',
       'u.name as unit_name',
       'u.symbol as unit_symbol'
@@ -110,11 +106,8 @@ export async function getAssetBomRollup(organizationId, rootAssetId) {
       sum(abl.quantity)::numeric(18,3) as required_quantity,
       iic.code as inventory_item_card_code,
       iic.name as inventory_item_card_name,
-      iic.size_spec as inventory_item_card_size_spec,
-      iic.size_unit_id as inventory_item_card_size_unit_id,
-      su.code as inventory_item_card_size_unit_code,
-      su.name as inventory_item_card_size_unit_name,
-      su.symbol as inventory_item_card_size_unit_symbol,
+      iic.specification as inventory_item_card_specification,
+      iic.type_name as inventory_item_card_type_name,
       u.code as unit_code,
       u.name as unit_name,
       u.symbol as unit_symbol
@@ -122,18 +115,14 @@ export async function getAssetBomRollup(organizationId, rootAssetId) {
     join asset_tree t on t.id = abl.asset_id
     join inventory_item_cards iic on iic.id = abl.inventory_item_card_id
     join units u on u.id = abl.unit_id
-    left join units su on su.id = iic.size_unit_id
     where abl.organization_id = ?
     group by
       abl.inventory_item_card_id,
       abl.unit_id,
       iic.code,
       iic.name,
-      iic.size_spec,
-      iic.size_unit_id,
-      su.code,
-      su.name,
-      su.symbol,
+      iic.specification,
+      iic.type_name,
       u.code,
       u.name,
       u.symbol

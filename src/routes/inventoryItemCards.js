@@ -15,6 +15,115 @@ import {
 const router = Router();
 router.use('/organizations/:id', loadOrganizationContext);
 
+function inferSchemaHint(err) {
+  const code = err && typeof err === 'object' ? err.code : undefined;
+  const message = err && typeof err === 'object' && typeof err.message === 'string' ? err.message : '';
+
+  if (
+    code === '42P01' ||
+    /relation .*inventory_item_card_fields.* does not exist/i.test(message)
+  ) {
+    return 'DB schema eksik (inventory item card fields). Backend tarafinda `npm run migrate` calistir.';
+  }
+
+  return null;
+}
+
+function isUniqueViolation(err) {
+  const code = err && typeof err === 'object' ? err.code : undefined;
+  return code === '23505';
+}
+
+const FIELD_DATA_TYPES = ['text', 'number', 'boolean', 'date'];
+
+function normalizeDataType(value) {
+  if (value === 'text' || value === 'number' || value === 'boolean' || value === 'date') return value;
+  return 'text';
+}
+
+function slugifyFieldName(text) {
+  const source = typeof text === 'string' ? text.trim() : '';
+  if (!source) return '';
+
+  const turkishMap = {
+    Ç: 'c',
+    ç: 'c',
+    Ğ: 'g',
+    ğ: 'g',
+    İ: 'i',
+    I: 'i',
+    ı: 'i',
+    Ö: 'o',
+    ö: 'o',
+    Ş: 's',
+    ş: 's',
+    Ü: 'u',
+    ü: 'u'
+  };
+
+  const ascii = source
+    .split('')
+    .map((ch) => turkishMap[ch] ?? ch)
+    .join('')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+  return ascii
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function normalizeUnitId(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
+function normalizeFields(rows) {
+  const normalized = [];
+
+  for (let idx = 0; idx < rows.length; idx += 1) {
+    const raw = rows[idx] ?? {};
+    const rawName = (typeof raw.name === 'string' ? raw.name : '').trim();
+    const label = (typeof raw.label === 'string' ? raw.label : '').trim();
+    const required = Boolean(raw.required);
+    const unitId = normalizeUnitId(raw.unit_id);
+    const active = raw.active == null ? true : Boolean(raw.active);
+    const rawDataType = raw.data_type;
+    const hasAny = Boolean(
+      rawName ||
+        label ||
+        required ||
+        unitId != null ||
+        active === false ||
+        (typeof rawDataType === 'string' && rawDataType !== 'text')
+    );
+
+    if (!hasAny) continue;
+
+    const name = slugifyFieldName(rawName || label);
+    if (!name) continue;
+
+    normalized.push({
+      name,
+      label: label || rawName || name,
+      dataType: normalizeDataType(raw.data_type),
+      required,
+      unitId,
+      sortOrder: Number.isFinite(Number(raw.sort_order)) ? Number(raw.sort_order) : idx,
+      active
+    });
+  }
+
+  return normalized
+    .map((field, index) => ({
+      ...field,
+      sortOrder: Number.isFinite(field.sortOrder) ? field.sortOrder : index
+    }))
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
 router.get('/organizations/:id/inventory-item-cards', (req, res) => {
   const organizationId = req.organizationId;
   const activeText = typeof req.query.active === 'string' ? req.query.active.trim().toLowerCase() : '';
@@ -30,7 +139,11 @@ router.get('/organizations/:id/inventory-item-cards', (req, res) => {
   return Promise.resolve()
     .then(() => listInventoryItemCardsByOrganization(organizationId, { active, q, warehouseTypeId, warehouseTypeCode }))
     .then((inventoryItemCards) => res.status(200).json({ inventory_item_cards: inventoryItemCards }))
-    .catch(() => res.status(500).json({ message: 'Failed to fetch inventory item cards' }));
+    .catch((err) => {
+      const hint = inferSchemaHint(err);
+      if (hint) return res.status(500).json({ message: hint });
+      return res.status(500).json({ message: 'Failed to fetch inventory item cards' });
+    });
 });
 
 const upsertSchema = z.object({
@@ -38,10 +151,22 @@ const upsertSchema = z.object({
   amount_unit_id: z.number().int().positive().optional(),
   code: z.string().trim().min(1).max(64),
   name: z.string().trim().min(1).max(255),
-  type_spec: z.string().trim().max(255).optional().nullable(),
-  size_spec: z.string().trim().max(255).optional().nullable(),
-  size_unit_id: z.number().int().positive().optional().nullable(),
-  active: z.boolean().optional()
+  type_name: z.string().trim().max(255).optional().nullable(),
+  specification: z.string().trim().max(255).optional().nullable(),
+  active: z.boolean().optional(),
+  fields: z
+    .array(
+      z.object({
+        name: z.string().optional(),
+        label: z.string().optional(),
+        data_type: z.enum(FIELD_DATA_TYPES).optional(),
+        required: z.boolean().optional(),
+        unit_id: z.number().int().positive().optional().nullable(),
+        sort_order: z.number().int().optional(),
+        active: z.boolean().optional()
+      })
+    )
+    .optional()
 });
 
 router.post('/organizations/:id/inventory-item-cards', (req, res) => {
@@ -64,15 +189,17 @@ router.post('/organizations/:id/inventory-item-cards', (req, res) => {
       if (!resolvedUnitId) return { badUnit: true };
 
       const unit = await getUnitById(resolvedUnitId);
-      if (!unit || unit.organization_id !== organizationId || !unit.active) return { badUnit: true };
-
-      if (parsed.data.size_unit_id) {
-        const sizeUnit = await getUnitById(parsed.data.size_unit_id);
-        if (!sizeUnit || sizeUnit.organization_id !== organizationId || !sizeUnit.active) return { badSizeUnit: true };
-      }
+      if (!unit || unit.organization_id !== organizationId) return { badUnit: true };
 
       const wt = await getWarehouseTypeById(parsed.data.warehouse_type_id);
       if (!wt || wt.organization_id !== organizationId) return { badWarehouseType: true };
+
+      const fields = normalizeFields(parsed.data.fields ?? []);
+      for (const field of fields) {
+        if (!field.unitId) continue;
+        const fieldUnit = await getUnitById(field.unitId);
+        if (!fieldUnit || fieldUnit.organization_id !== organizationId) return { badFieldUnit: true };
+      }
 
       const inventoryItemCard = await db.transaction((trx) =>
         createInventoryItemCard(trx, {
@@ -81,10 +208,10 @@ router.post('/organizations/:id/inventory-item-cards', (req, res) => {
           amountUnitId: unit.id,
           code: parsed.data.code,
           name: parsed.data.name,
-          typeSpec: parsed.data.type_spec?.trim() || null,
-          sizeSpec: parsed.data.size_spec?.trim() || null,
-          sizeUnitId: parsed.data.size_unit_id ?? null,
-          active: parsed.data.active ?? true
+          typeName: parsed.data.type_name?.trim() || null,
+          specification: parsed.data.specification?.trim() || null,
+          active: parsed.data.active ?? true,
+          fields
         })
       );
 
@@ -93,11 +220,16 @@ router.post('/organizations/:id/inventory-item-cards', (req, res) => {
     .then((result) => {
       if (result.conflict) return res.status(409).json({ message: 'Inventory item card code already exists' });
       if (result.badUnit) return res.status(400).json({ message: 'Invalid unit' });
-      if (result.badSizeUnit) return res.status(400).json({ message: 'Invalid size unit' });
+      if (result.badFieldUnit) return res.status(400).json({ message: 'Invalid field unit' });
       if (result.badWarehouseType) return res.status(400).json({ message: 'Invalid warehouse type' });
       return res.status(201).json({ inventory_item_card: result.inventoryItemCard });
     })
-    .catch(() => res.status(500).json({ message: 'Failed to create inventory item card' }));
+    .catch((err) => {
+      const hint = inferSchemaHint(err);
+      if (hint) return res.status(500).json({ message: hint });
+      if (isUniqueViolation(err)) return res.status(409).json({ message: 'Inventory item card code already exists' });
+      return res.status(500).json({ message: 'Failed to create inventory item card' });
+    });
 });
 
 router.put('/organizations/:id/inventory-item-cards/:inventoryItemCardId', (req, res) => {
@@ -128,15 +260,17 @@ router.put('/organizations/:id/inventory-item-cards/:inventoryItemCardId', (req,
       if (!resolvedUnitId) return { badUnit: true };
 
       const unit = await getUnitById(resolvedUnitId);
-      if (!unit || unit.organization_id !== organizationId || !unit.active) return { badUnit: true };
-
-      if (parsed.data.size_unit_id) {
-        const sizeUnit = await getUnitById(parsed.data.size_unit_id);
-        if (!sizeUnit || sizeUnit.organization_id !== organizationId || !sizeUnit.active) return { badSizeUnit: true };
-      }
+      if (!unit || unit.organization_id !== organizationId) return { badUnit: true };
 
       const wt = await getWarehouseTypeById(parsed.data.warehouse_type_id);
       if (!wt || wt.organization_id !== organizationId) return { badWarehouseType: true };
+
+      const fields = normalizeFields(parsed.data.fields ?? []);
+      for (const field of fields) {
+        if (!field.unitId) continue;
+        const fieldUnit = await getUnitById(field.unitId);
+        if (!fieldUnit || fieldUnit.organization_id !== organizationId) return { badFieldUnit: true };
+      }
 
       const inventoryItemCard = await db.transaction((trx) =>
         updateInventoryItemCard(trx, {
@@ -146,10 +280,10 @@ router.put('/organizations/:id/inventory-item-cards/:inventoryItemCardId', (req,
           amountUnitId: unit.id,
           code: parsed.data.code,
           name: parsed.data.name,
-          typeSpec: parsed.data.type_spec?.trim() || null,
-          sizeSpec: parsed.data.size_spec?.trim() || null,
-          sizeUnitId: parsed.data.size_unit_id ?? null,
-          active: parsed.data.active ?? true
+          typeName: parsed.data.type_name?.trim() || null,
+          specification: parsed.data.specification?.trim() || null,
+          active: parsed.data.active ?? true,
+          fields
         })
       );
 
@@ -159,12 +293,17 @@ router.put('/organizations/:id/inventory-item-cards/:inventoryItemCardId', (req,
       if (result.notFound) return res.status(404).json({ message: 'Inventory item card not found' });
       if (result.conflict) return res.status(409).json({ message: 'Inventory item card code already exists' });
       if (result.badUnit) return res.status(400).json({ message: 'Invalid unit' });
-      if (result.badSizeUnit) return res.status(400).json({ message: 'Invalid size unit' });
+      if (result.badFieldUnit) return res.status(400).json({ message: 'Invalid field unit' });
       if (result.badWarehouseType) return res.status(400).json({ message: 'Invalid warehouse type' });
       if (!result.inventoryItemCard) return res.status(404).json({ message: 'Inventory item card not found' });
       return res.status(200).json({ inventory_item_card: result.inventoryItemCard });
     })
-    .catch(() => res.status(500).json({ message: 'Failed to update inventory item card' }));
+    .catch((err) => {
+      const hint = inferSchemaHint(err);
+      if (hint) return res.status(500).json({ message: hint });
+      if (isUniqueViolation(err)) return res.status(409).json({ message: 'Inventory item card code already exists' });
+      return res.status(500).json({ message: 'Failed to update inventory item card' });
+    });
 });
 
 router.delete('/organizations/:id/inventory-item-cards/:inventoryItemCardId', (req, res) => {

@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import db from '../db/knex.js';
 import { createOrganization } from '../models/organizations.js';
-import { createUser, getUserByEmail } from '../models/users.js';
+import { createUser, getUserByEmail, getUserById, updateUserDefaultCurrency } from '../models/users.js';
 
 const router = Router();
 
@@ -25,6 +25,21 @@ const registerSchema = z.object({
 const forgotPasswordSchema = z.object({
   email: z.string().email()
 });
+
+const profileQuerySchema = z.object({
+  email: z.string().email()
+});
+
+function toProfilePayload(user) {
+  return {
+    id: user.id,
+    organization_id: user.organization_id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    default_currency_code: user.default_currency_code ?? null
+  };
+}
 
 router.post('/auth/login', (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
@@ -58,13 +73,7 @@ router.post('/auth/login', (req, res) => {
 
       return res.status(200).json({
         message: 'Login successful',
-        user: {
-          id: user.id,
-          organization_id: user.organization_id,
-          name: user.name,
-          email: user.email,
-          role: user.role
-        },
+        user: toProfilePayload(user),
         organization: org ?? null,
         token: 'demo-token'
       });
@@ -101,7 +110,8 @@ router.post('/auth/register', (req, res) => {
           name: parsed.data.admin_name,
           email: parsed.data.admin_email,
           passwordHash,
-          role: 'admin'
+          role: 'admin',
+          defaultCurrencyCode: null
         });
         return { org, admin };
       });
@@ -120,6 +130,75 @@ router.post('/auth/register', (req, res) => {
       });
     })
     .catch(() => res.status(500).json({ message: 'Register failed' }));
+});
+
+router.get('/auth/profile', (req, res) => {
+  const parsed = profileQuerySchema.safeParse({ email: req.query.email });
+
+  if (!parsed.success) {
+    return res.status(400).json({
+      message: 'Validation failed',
+      errors: parsed.error.flatten()
+    });
+  }
+
+  return Promise.resolve()
+    .then(async () => {
+      const user = await getUserByEmail(parsed.data.email);
+      if (!user) return { notFound: true };
+      return { user: toProfilePayload(user) };
+    })
+    .then((result) => {
+      if (result.notFound) return res.status(404).json({ message: 'User not found' });
+      return res.status(200).json(result);
+    })
+    .catch(() => res.status(500).json({ message: 'Profile fetch failed' }));
+});
+
+const updateProfileSchema = z.object({
+  user_id: z.number().int().positive(),
+  default_currency_code: z.string().trim().min(1).max(8).nullable()
+});
+
+router.put('/auth/profile', (req, res) => {
+  const parsed = updateProfileSchema.safeParse(req.body);
+
+  if (!parsed.success) {
+    return res.status(400).json({
+      message: 'Validation failed',
+      errors: parsed.error.flatten()
+    });
+  }
+
+  return Promise.resolve()
+    .then(async () => {
+      const user = await getUserById(parsed.data.user_id);
+      if (!user) return { notFound: true };
+
+      const nextCurrencyCode = parsed.data.default_currency_code?.trim().toUpperCase() || null;
+      if (nextCurrencyCode) {
+        const currency = await db('currencies')
+          .where({ organization_id: user.organization_id })
+          .whereRaw('upper(code) = ?', [nextCurrencyCode])
+          .first(['id', 'code']);
+        if (!currency) return { invalidCurrency: true };
+      }
+
+      const updated = await db.transaction((trx) =>
+        updateUserDefaultCurrency(trx, {
+          userId: user.id,
+          organizationId: user.organization_id,
+          defaultCurrencyCode: nextCurrencyCode
+        })
+      );
+      return { updated };
+    })
+    .then((result) => {
+      if (result.notFound) return res.status(404).json({ message: 'User not found' });
+      if (result.invalidCurrency) return res.status(400).json({ message: 'Invalid currency' });
+      return res.status(200).json({ user: result.updated });
+    })
+    .catch(() => res.status(500).json({ message: 'Profile update failed' }));
 });
 
 router.post('/auth/forgot-password', (req, res) => {

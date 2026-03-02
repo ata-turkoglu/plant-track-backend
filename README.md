@@ -52,7 +52,7 @@ Contract docs:
 
 - `inventory_items` / `inventory_item_cards`:
   - legacy `items.type` is removed; use `warehouse_type_id`.
-  - inventory item payloads include `brand`, `model`, plus card-derived `size_spec`, `size_unit_id`.
+  - inventory item payloads include `brand`, `model`, plus card-derived `type_name`, `specification`.
 - `translations`:
   - model is single-row per key with columns `tr` and `en` (not locale/value rows).
   - namespaces include at least `warehouse_type`, `unit`, `unit_symbol`.

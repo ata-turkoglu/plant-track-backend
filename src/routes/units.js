@@ -3,7 +3,7 @@ import { z } from 'zod';
 import db from '../db/knex.js';
 import {
   createUnit,
-  deactivateUnit,
+  deleteUnit,
   getUnitById,
   listUnitsByOrganization,
   updateUnit
@@ -31,8 +31,7 @@ const createSchema = z.object({
 });
 
 const updateSchema = z.object({
-  ...baseSchema,
-  active: z.boolean().optional()
+  ...baseSchema
 });
 
 function normalizeCode(value) {
@@ -246,8 +245,7 @@ router.patch('/units/:id', (req, res) => {
           organizationId: existing.organization_id,
           code,
           name: enName,
-          symbol: symbolEn,
-          active: parsed.data.active ?? true
+          symbol: symbolEn
         });
       });
 
@@ -276,20 +274,42 @@ router.delete('/units/:id', (req, res) => {
       if (!existing) return { notFound: true };
       if (existing.system) return { systemLocked: true };
 
-      const unit = await db.transaction((trx) =>
-        deactivateUnit(trx, {
+      const usedByInventoryCards = await db('inventory_item_cards').where({ amount_unit_id: unitId }).first(['id']);
+      if (usedByInventoryCards) return { inUse: true };
+
+      const usedByInventoryItems = await db('inventory_items').where({ amount_unit_id: unitId }).first(['id']);
+      if (usedByInventoryItems) return { inUse: true };
+
+      const usedByAssetCardFields = await db('asset_card_fields').where({ unit_id: unitId }).first(['id']);
+      if (usedByAssetCardFields) return { inUse: true };
+
+      const hasInventoryItemCardFields = await db.schema.hasTable('inventory_item_card_fields');
+      if (hasInventoryItemCardFields) {
+        const usedByItemCardFields = await db('inventory_item_card_fields').where({ unit_id: unitId }).first(['id']);
+        if (usedByItemCardFields) return { inUse: true };
+      }
+
+      const usedByBomLines = await db('asset_bom_lines').where({ unit_id: unitId }).first(['id']);
+      if (usedByBomLines) return { inUse: true };
+
+      const usedByMovementLines = await db('inventory_movement_lines').where({ amount_unit_id: unitId }).first(['id']);
+      if (usedByMovementLines) return { inUse: true };
+
+      const deleted = await db.transaction((trx) =>
+        deleteUnit(trx, {
           id: unitId,
           organizationId: existing.organization_id
         })
       );
 
-      return { unit };
+      return { deleted };
     })
     .then((result) => {
       if (result.notFound) return res.status(404).json({ message: 'Unit not found' });
       if (result.systemLocked) return res.status(400).json({ message: 'System unit cannot be deleted' });
-      if (!result.unit) return res.status(404).json({ message: 'Unit not found' });
-      return res.status(200).json({ unit: result.unit });
+      if (result.inUse) return res.status(409).json({ message: 'Unit is in use and cannot be deleted' });
+      if (!result.deleted) return res.status(404).json({ message: 'Unit not found' });
+      return res.status(204).send();
     })
     .catch(() => res.status(500).json({ message: 'Failed to delete unit' }));
 });

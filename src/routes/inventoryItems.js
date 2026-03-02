@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import db from '../db/knex.js';
 import { listInventoryItemsByOrganization, createInventoryItem, updateInventoryItem, setInventoryItemActive } from '../models/inventoryItems.js';
+import { getInventoryItemCardById } from '../models/inventoryItemCards.js';
 import { getUnitById } from '../models/units.js';
 import { getWarehouseTypeById } from '../models/warehouseTypes.js';
 import { loadOrganizationContext } from '../middleware/organizationContext.js';
@@ -11,6 +12,76 @@ const router = Router();
 router.use('/organizations/:id', loadOrganizationContext);
 
 const WAREHOUSE_TYPES_REQUIRING_INVENTORY_ITEM_CARD = new Set(['SPARE_PART', 'RAW_MATERIAL']);
+const FIELD_DATA_TYPES = new Set(['text', 'number', 'boolean', 'date']);
+
+function isPlainObject(value) {
+  return value != null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeFieldType(value) {
+  return FIELD_DATA_TYPES.has(value) ? value : 'text';
+}
+
+function normalizeInventoryItemAttributesBySchema(attributesJson, schemaRows) {
+  if (schemaRows.length === 0) return { ok: true, value: null };
+  if (attributesJson != null && !isPlainObject(attributesJson)) {
+    return { ok: false, message: 'attributes_json must be an object for selected inventory item card fields' };
+  }
+
+  const source = isPlainObject(attributesJson) ? attributesJson : {};
+  const normalized = {};
+
+  for (const rawField of schemaRows) {
+    if (rawField?.active === false) continue;
+    const key = typeof rawField?.name === 'string' ? rawField.name.trim() : '';
+    if (!key) continue;
+
+    const label = typeof rawField?.label === 'string' && rawField.label.trim() ? rawField.label.trim() : key;
+    const required = Boolean(rawField?.required);
+    const dataType = normalizeFieldType(rawField?.data_type);
+    const rawValue = source[key];
+
+    if (rawValue == null || rawValue === '') {
+      if (required) return { ok: false, message: `${label} is required` };
+      continue;
+    }
+
+    if (dataType === 'number') {
+      const parsed = typeof rawValue === 'number' ? rawValue : Number(String(rawValue).trim());
+      if (!Number.isFinite(parsed)) return { ok: false, message: `${label} must be a number` };
+      normalized[key] = parsed;
+      continue;
+    }
+
+    if (dataType === 'boolean') {
+      if (typeof rawValue === 'boolean') {
+        normalized[key] = rawValue;
+        continue;
+      }
+      if (rawValue === 'true' || rawValue === 'false') {
+        normalized[key] = rawValue === 'true';
+        continue;
+      }
+      return { ok: false, message: `${label} must be true or false` };
+    }
+
+    if (dataType === 'date') {
+      const text = String(rawValue).trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return { ok: false, message: `${label} must be a valid date` };
+      normalized[key] = text;
+      continue;
+    }
+
+    const text = String(rawValue).trim();
+    if (!text) {
+      if (required) return { ok: false, message: `${label} is required` };
+      continue;
+    }
+    normalized[key] = text;
+  }
+
+  return { ok: true, value: Object.keys(normalized).length > 0 ? normalized : null };
+}
 
 router.get('/organizations/:id/inventory-items', (req, res) => {
   const organizationId = req.organizationId;
@@ -44,8 +115,9 @@ const createSchema = z.object({
   description: z.string().max(10_000).optional().nullable(),
   brand: z.string().max(255).optional().nullable(),
   model: z.string().max(255).optional().nullable(),
-  size_spec: z.string().max(255).optional().nullable(),
-  size_unit_id: z.number().int().positive().optional().nullable(),
+  attributes_json: z.unknown().optional().nullable(),
+  specification: z.string().max(255).optional().nullable(),
+  type_name: z.string().max(255).optional().nullable(),
   amount_unit_id: z.number().int().positive().optional(),
   active: z.boolean().optional()
 });
@@ -79,15 +151,16 @@ router.post('/organizations/:id/inventory-items', (req, res) => {
       }
 
       if (requestedCardId) {
-        const card = await db('inventory_item_cards')
-          .where({ id: requestedCardId, organization_id: organizationId })
-          .first(['id', 'warehouse_type_id', 'amount_unit_id', 'active']);
+        const card = await getInventoryItemCardById(requestedCardId);
         if (!card) return { badInventoryCard: true };
+        if (card.organization_id !== organizationId) return { badInventoryCard: true };
         if (!card.active) return { badInventoryCard: true };
         if (card.warehouse_type_id !== wt.id) return { badInventoryCard: true };
 
         const unit = await getUnitById(card.amount_unit_id);
-        if (!unit || unit.organization_id !== organizationId || !unit.active) return { badUnit: true };
+        if (!unit || unit.organization_id !== organizationId) return { badUnit: true };
+        const normalizedAttr = normalizeInventoryItemAttributesBySchema(parsed.data.attributes_json ?? null, card.fields ?? []);
+        if (!normalizedAttr.ok) return { badAttributes: normalizedAttr.message };
 
         const inventoryItem = await db.transaction(async (trx) =>
           createInventoryItem(trx, {
@@ -99,6 +172,7 @@ router.post('/organizations/:id/inventory-items', (req, res) => {
             description: parsed.data.description?.trim() || null,
             brand: parsed.data.brand?.trim() || null,
             model: parsed.data.model?.trim() || null,
+            attributesJson: normalizedAttr.value,
             unitId: unit.id,
             active: parsed.data.active
           })
@@ -111,12 +185,7 @@ router.post('/organizations/:id/inventory-items', (req, res) => {
       if (!resolvedUnitId) return { badUnit: true };
 
       const unit = await getUnitById(resolvedUnitId);
-      if (!unit || unit.organization_id !== organizationId || !unit.active) return { badUnit: true };
-
-      if (parsed.data.size_unit_id) {
-        const sizeUnit = await getUnitById(parsed.data.size_unit_id);
-        if (!sizeUnit || sizeUnit.organization_id !== organizationId || !sizeUnit.active) return { badSizeUnit: true };
-      }
+      if (!unit || unit.organization_id !== organizationId) return { badUnit: true };
 
       const inventoryItem = await db.transaction(async (trx) => {
         const cardRows = await trx('inventory_item_cards')
@@ -126,8 +195,8 @@ router.post('/organizations/:id/inventory-items', (req, res) => {
             amount_unit_id: unit.id,
             code: parsed.data.code,
             name: parsed.data.name,
-            size_spec: parsed.data.size_spec?.trim() || null,
-            size_unit_id: parsed.data.size_unit_id ?? null,
+            type_name: parsed.data.type_name?.trim() || null,
+            specification: parsed.data.specification?.trim() || null,
             active: parsed.data.active ?? true
           })
           .returning(['id']);
@@ -144,6 +213,7 @@ router.post('/organizations/:id/inventory-items', (req, res) => {
           description: parsed.data.description?.trim() || null,
           brand: parsed.data.brand?.trim() || null,
           model: parsed.data.model?.trim() || null,
+          attributesJson: null,
           unitId: unit.id,
           active: parsed.data.active
         });
@@ -155,9 +225,9 @@ router.post('/organizations/:id/inventory-items', (req, res) => {
       if (result.conflict) return res.status(409).json({ message: 'Inventory item code already exists' });
       if (result.inventoryCardRequired) return res.status(400).json({ message: 'inventory_item_card_id is required for this warehouse type' });
       if (result.badUnit) return res.status(400).json({ message: 'Invalid unit' });
-      if (result.badSizeUnit) return res.status(400).json({ message: 'Invalid size unit' });
       if (result.badWarehouseType) return res.status(400).json({ message: 'Invalid warehouse type' });
       if (result.badInventoryCard) return res.status(400).json({ message: 'Invalid inventory card' });
+      if (result.badAttributes) return res.status(400).json({ message: result.badAttributes });
       return res.status(201).json({ inventory_item: result.inventoryItem });
     })
     .catch(() => res.status(500).json({ message: 'Failed to create inventory item' }));
@@ -169,8 +239,9 @@ const updateSchema = z.object({
   description: z.string().max(10_000).optional().nullable(),
   brand: z.string().max(255).optional().nullable(),
   model: z.string().max(255).optional().nullable(),
-  size_spec: z.string().max(255).optional().nullable(),
-  size_unit_id: z.number().int().positive().optional().nullable(),
+  attributes_json: z.unknown().optional().nullable(),
+  specification: z.string().max(255).optional().nullable(),
+  type_name: z.string().max(255).optional().nullable(),
   amount_unit_id: z.number().int().positive().optional(),
   inventory_item_card_id: z.number().int().positive().optional().nullable(),
   active: z.boolean().optional()
@@ -210,10 +281,9 @@ router.put('/organizations/:id/inventory-items/:inventoryItemId', (req, res) => 
       const isCardChange = Boolean(parsed.data.inventory_item_card_id) && parsed.data.inventory_item_card_id !== existingItem.inventory_item_card_id;
       const nextInventoryCardId = parsed.data.inventory_item_card_id ?? existingItem.inventory_item_card_id;
 
-      const card = await db('inventory_item_cards')
-        .where({ id: nextInventoryCardId, organization_id: organizationId })
-        .first(['id', 'warehouse_type_id', 'amount_unit_id', 'active']);
+      const card = await getInventoryItemCardById(nextInventoryCardId);
       if (!card) return { badInventoryCard: true };
+      if (card.organization_id !== organizationId) return { badInventoryCard: true };
       if (isCardChange && !card.active) return { badInventoryCard: true };
       if (card.warehouse_type_id !== existingItem.warehouse_type_id) return { badInventoryCard: true };
 
@@ -221,7 +291,9 @@ router.put('/organizations/:id/inventory-items/:inventoryItemId', (req, res) => 
       const resolvedUnitId = isCardScopedType || isCardChange ? card.amount_unit_id : requestedUnitId;
       if (!resolvedUnitId) return { badUnit: true };
       const unit = await getUnitById(resolvedUnitId);
-      if (!unit || unit.organization_id !== organizationId || !unit.active) return { badUnit: true };
+      if (!unit || unit.organization_id !== organizationId) return { badUnit: true };
+      const normalizedAttr = normalizeInventoryItemAttributesBySchema(parsed.data.attributes_json ?? null, card.fields ?? []);
+      if (!normalizedAttr.ok) return { badAttributes: normalizedAttr.message };
 
       const inventoryItem = await db.transaction(async (trx) => {
         if (!isCardScopedType && !isCardChange) {
@@ -238,8 +310,8 @@ router.put('/organizations/:id/inventory-items/:inventoryItemId', (req, res) => 
                 code: parsed.data.code,
                 name: parsed.data.name,
                 amount_unit_id: unit.id,
-                size_spec: parsed.data.size_spec?.trim() || null,
-                size_unit_id: parsed.data.size_unit_id ?? null,
+                type_name: parsed.data.type_name?.trim() || null,
+                specification: parsed.data.specification?.trim() || null,
                 active: parsed.data.active ?? true,
                 updated_at: trx.fn.now()
               });
@@ -255,6 +327,7 @@ router.put('/organizations/:id/inventory-items/:inventoryItemId', (req, res) => 
           description: parsed.data.description?.trim() || null,
           brand: parsed.data.brand?.trim() || null,
           model: parsed.data.model?.trim() || null,
+          attributesJson: normalizedAttr.value,
           unitId: unit.id,
           active: parsed.data.active ?? true
         });
@@ -266,9 +339,9 @@ router.put('/organizations/:id/inventory-items/:inventoryItemId', (req, res) => 
       if (result.notFoundInventoryItem) return res.status(404).json({ message: 'Inventory item not found' });
       if (result.conflict) return res.status(409).json({ message: 'Inventory item code already exists' });
       if (result.badUnit) return res.status(400).json({ message: 'Invalid unit' });
-      if (result.badSizeUnit) return res.status(400).json({ message: 'Invalid size unit' });
       if (result.badWarehouseType) return res.status(400).json({ message: 'Invalid warehouse type' });
       if (result.badInventoryCard) return res.status(400).json({ message: 'Invalid inventory card' });
+      if (result.badAttributes) return res.status(400).json({ message: result.badAttributes });
       if (!result.inventoryItem) return res.status(404).json({ message: 'Inventory item not found' });
       return res.status(200).json({ inventory_item: result.inventoryItem });
     })

@@ -12,10 +12,11 @@ function inventoryItemSelectColumns(dbOrTrx) {
     'ii.description',
     'ii.brand',
     'ii.model',
+    'ii.attributes_json',
     dbOrTrx.raw('iic.code as inventory_item_card_code'),
     dbOrTrx.raw('iic.name as inventory_item_card_name'),
-    dbOrTrx.raw('iic.size_spec as size_spec'),
-    dbOrTrx.raw('iic.size_unit_id as size_unit_id'),
+    dbOrTrx.raw('iic.type_name as type_name'),
+    dbOrTrx.raw('iic.specification as specification'),
     'ii.active'
   ];
 }
@@ -59,7 +60,7 @@ export async function getInventoryItemById(id) {
 
 export async function createInventoryItem(
   trx,
-  { organizationId, inventoryItemCardId, warehouseTypeId, code, name, description, brand, model, unitId, active }
+  { organizationId, inventoryItemCardId, warehouseTypeId, code, name, description, brand, model, attributesJson, unitId, active }
 ) {
   const rows = await trx('inventory_items')
     .insert({
@@ -71,6 +72,7 @@ export async function createInventoryItem(
       description: description ?? null,
       brand: brand ?? null,
       model: model ?? null,
+      attributes_json: attributesJson ?? null,
       amount_unit_id: unitId,
       active: active ?? true
     })
@@ -83,7 +85,7 @@ export async function createInventoryItem(
 
 export async function updateInventoryItem(
   trx,
-  { organizationId, inventoryItemId, inventoryItemCardId, code, name, description, brand, model, unitId, active }
+  { organizationId, inventoryItemId, inventoryItemCardId, code, name, description, brand, model, attributesJson, unitId, active }
 ) {
   const patch = {
     code,
@@ -91,6 +93,7 @@ export async function updateInventoryItem(
     description: description ?? null,
     brand: brand ?? null,
     model: model ?? null,
+    attributes_json: attributesJson ?? null,
     amount_unit_id: unitId,
     active,
     updated_at: trx.fn.now()

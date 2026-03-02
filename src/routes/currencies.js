@@ -3,7 +3,7 @@ import { z } from 'zod';
 import db from '../db/knex.js';
 import {
   createCurrency,
-  deactivateCurrency,
+  deleteCurrency,
   getCurrencyById,
   listCurrenciesByOrganization,
   updateCurrency
@@ -20,7 +20,7 @@ const baseSchema = {
 };
 
 const createSchema = z.object({ ...baseSchema });
-const updateSchema = z.object({ ...baseSchema, active: z.boolean().optional() });
+const updateSchema = z.object({ ...baseSchema });
 
 function normalizeCode(value) {
   return value.trim().toUpperCase();
@@ -100,7 +100,6 @@ router.patch('/currencies/:id', (req, res) => {
       if (!isValidCode(code)) return { invalidCode: true };
       const name = parsed.data.name.trim();
       const symbol = parsed.data.symbol?.trim() || null;
-      const active = typeof parsed.data.active === 'boolean' ? parsed.data.active : Boolean(existing.active);
 
       const conflict = await db('currencies')
         .where({ organization_id: existing.organization_id })
@@ -115,8 +114,7 @@ router.patch('/currencies/:id', (req, res) => {
           organizationId: existing.organization_id,
           code,
           name,
-          symbol,
-          active
+          symbol
         })
       );
 
@@ -144,23 +142,28 @@ router.delete('/currencies/:id', (req, res) => {
       if (!existing) return { notFound: true };
       if (existing.system) return { systemLocked: true };
 
-      const currency = await db.transaction((trx) =>
-        deactivateCurrency(trx, {
+      const usedByMovements = await db('inventory_movement_lines')
+        .whereRaw('upper(currency_code) = ?', [String(existing.code ?? '').toUpperCase()])
+        .first(['id']);
+      if (usedByMovements) return { inUse: true };
+
+      const deleted = await db.transaction((trx) =>
+        deleteCurrency(trx, {
           id: currencyId,
           organizationId: existing.organization_id
         })
       );
 
-      return { currency };
+      return { deleted };
     })
     .then((result) => {
       if (result.notFound) return res.status(404).json({ message: 'Currency not found' });
       if (result.systemLocked) return res.status(400).json({ message: 'System currency cannot be deleted' });
-      if (!result.currency) return res.status(404).json({ message: 'Currency not found' });
-      return res.status(200).json({ currency: result.currency });
+      if (result.inUse) return res.status(409).json({ message: 'Currency is in use and cannot be deleted' });
+      if (!result.deleted) return res.status(404).json({ message: 'Currency not found' });
+      return res.status(204).send();
     })
     .catch(() => res.status(500).json({ message: 'Failed to delete currency' }));
 });
 
 export default router;
-

@@ -15,7 +15,6 @@ export async function listUnitsByOrganization(organizationId) {
     .where({ 'u.organization_id': organizationId })
     .orderBy([
       { column: 'u.system', order: 'desc' },
-      { column: 'u.active', order: 'desc' },
       { column: 'u.name', order: 'asc' }
     ])
     .select([
@@ -25,7 +24,6 @@ export async function listUnitsByOrganization(organizationId) {
       'u.name',
       'u.symbol',
       'u.system',
-      'u.active',
       'u.created_at',
       'u.updated_at',
       db.raw('tu.tr as tr_name'),
@@ -36,7 +34,7 @@ export async function listUnitsByOrganization(organizationId) {
 }
 
 export async function getUnitById(id) {
-  return db('units').where({ id }).first(['id', 'organization_id', 'code', 'name', 'symbol', 'system', 'active']);
+  return db('units').where({ id }).first(['id', 'organization_id', 'code', 'name', 'symbol', 'system']);
 }
 
 export async function createUnit(trx, { organizationId, code, name, symbol }) {
@@ -46,37 +44,32 @@ export async function createUnit(trx, { organizationId, code, name, symbol }) {
       code,
       name,
       symbol: symbol ?? null,
-      system: false,
-      active: true
+      system: false
     })
-    .returning(['id', 'organization_id', 'code', 'name', 'symbol', 'system', 'active', 'created_at', 'updated_at']);
+    .returning(['id', 'organization_id', 'code', 'name', 'symbol', 'system', 'created_at', 'updated_at']);
 
   return rows[0];
 }
 
-export async function updateUnit(trx, { id, organizationId, code, name, symbol, active }) {
+export async function updateUnit(trx, { id, organizationId, code, name, symbol }) {
   const rows = await trx('units')
     .where({ id, organization_id: organizationId })
     .update({
       code,
       name,
       symbol: symbol ?? null,
-      active,
       updated_at: trx.fn.now()
     })
-    .returning(['id', 'organization_id', 'code', 'name', 'symbol', 'system', 'active', 'created_at', 'updated_at']);
+    .returning(['id', 'organization_id', 'code', 'name', 'symbol', 'system', 'created_at', 'updated_at']);
 
   return rows[0] ?? null;
 }
 
-export async function deactivateUnit(trx, { id, organizationId }) {
+export async function deleteUnit(trx, { id, organizationId }) {
   const rows = await trx('units')
     .where({ id, organization_id: organizationId })
-    .update({
-      active: false,
-      updated_at: trx.fn.now()
-    })
-    .returning(['id', 'organization_id', 'code', 'name', 'symbol', 'system', 'active', 'created_at', 'updated_at']);
+    .del()
+    .returning(['id']);
 
   return rows[0] ?? null;
 }

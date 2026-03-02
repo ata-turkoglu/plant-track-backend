@@ -5,14 +5,13 @@ export async function listCurrenciesByOrganization(organizationId) {
     .where({ organization_id: organizationId })
     .orderBy([
       { column: 'system', order: 'desc' },
-      { column: 'active', order: 'desc' },
       { column: 'code', order: 'asc' }
     ])
-    .select(['id', 'organization_id', 'code', 'name', 'symbol', 'system', 'active', 'created_at', 'updated_at']);
+    .select(['id', 'organization_id', 'code', 'name', 'symbol', 'system', 'created_at', 'updated_at']);
 }
 
 export async function getCurrencyById(id) {
-  return db('currencies').where({ id }).first(['id', 'organization_id', 'code', 'name', 'symbol', 'system', 'active']);
+  return db('currencies').where({ id }).first(['id', 'organization_id', 'code', 'name', 'symbol', 'system']);
 }
 
 export async function createCurrency(trx, { organizationId, code, name, symbol }) {
@@ -22,38 +21,32 @@ export async function createCurrency(trx, { organizationId, code, name, symbol }
       code,
       name,
       symbol: symbol ?? null,
-      system: false,
-      active: true
+      system: false
     })
-    .returning(['id', 'organization_id', 'code', 'name', 'symbol', 'system', 'active', 'created_at', 'updated_at']);
+    .returning(['id', 'organization_id', 'code', 'name', 'symbol', 'system', 'created_at', 'updated_at']);
 
   return rows[0];
 }
 
-export async function updateCurrency(trx, { id, organizationId, code, name, symbol, active }) {
+export async function updateCurrency(trx, { id, organizationId, code, name, symbol }) {
   const rows = await trx('currencies')
     .where({ id, organization_id: organizationId })
     .update({
       code,
       name,
       symbol: symbol ?? null,
-      active,
       updated_at: trx.fn.now()
     })
-    .returning(['id', 'organization_id', 'code', 'name', 'symbol', 'system', 'active', 'created_at', 'updated_at']);
+    .returning(['id', 'organization_id', 'code', 'name', 'symbol', 'system', 'created_at', 'updated_at']);
 
   return rows[0] ?? null;
 }
 
-export async function deactivateCurrency(trx, { id, organizationId }) {
+export async function deleteCurrency(trx, { id, organizationId }) {
   const rows = await trx('currencies')
     .where({ id, organization_id: organizationId })
-    .update({
-      active: false,
-      updated_at: trx.fn.now()
-    })
-    .returning(['id', 'organization_id', 'code', 'name', 'symbol', 'system', 'active', 'created_at', 'updated_at']);
+    .del()
+    .returning(['id']);
 
   return rows[0] ?? null;
 }
-
