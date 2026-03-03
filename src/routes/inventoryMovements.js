@@ -74,8 +74,6 @@ function normalizeMovementType(raw) {
 async function validateLineInputs(organizationId, eventTypeRaw, lines) {
   const eventType = normalizeMovementType(eventTypeRaw);
   const requiresCommercial = eventType === 'PURCHASE' || eventType === 'SALE';
-  const allowFirmFrom = eventType === 'PURCHASE';
-  const allowFirmTo = eventType === 'SALE';
   const internalNodeTypes = new Set(['WAREHOUSE', 'LOCATION', 'VIRTUAL']);
 
   for (const line of lines) {
@@ -116,10 +114,10 @@ async function validateLineInputs(organizationId, eventTypeRaw, lines) {
 
     if (eventType === 'PURCHASE') {
       if (fromNode.node_type !== 'FIRM') return { badFromNodeType: true };
-      if (!internalNodeTypes.has(String(toNode.node_type ?? '').toUpperCase())) return { badToNodeType: true };
+      if (String(toNode.node_type ?? '').toUpperCase() !== 'WAREHOUSE') return { badToNodeType: true };
     }
     if (eventType === 'SALE') {
-      if (!internalNodeTypes.has(String(fromNode.node_type ?? '').toUpperCase())) return { badFromNodeType: true };
+      if (String(fromNode.node_type ?? '').toUpperCase() !== 'WAREHOUSE') return { badFromNodeType: true };
       if (toNode.node_type !== 'FIRM') return { badToNodeType: true };
     }
     if (eventType === 'TRANSFER') {
@@ -134,7 +132,7 @@ async function validateLineInputs(organizationId, eventTypeRaw, lines) {
   }
 
   const units = await db('units')
-    .where({ organization_id: organizationId, active: true })
+    .where({ organization_id: organizationId })
     .whereIn('id', Array.from(requiredUnitIds))
     .select(['id']);
   const unitIdSet = new Set(units.map((row) => row.id));

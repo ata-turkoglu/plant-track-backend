@@ -12,7 +12,7 @@ module.exports = {
   },
   migrations: {
     directory: path.resolve(__dirname, process.env.KNEX_MIGRATIONS_DIR ?? 'migrations'),
-    // Legacy migration dosyalari `migrations_legacy` klasorune tasindigi icin
+    // Legacy migration dosyaları `migrations_legacy` klasörüne taşındığı için
     // mevcut DB'lerdeki eski kayitlar validation hatasi uretmesin.
     disableMigrationsListValidation: true
   }
