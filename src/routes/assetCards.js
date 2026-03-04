@@ -177,6 +177,7 @@ function normalizeFields(rows) {
 const upsertSchema = z.object({
   code: z.string().trim().min(1).max(64),
   name: z.string().trim().min(1).max(255),
+  description: z.string().max(10_000).optional().nullable(),
   active: z.boolean().optional(),
   fields: z
     .array(
@@ -213,6 +214,7 @@ router.post('/organizations/:id/asset-cards', (req, res) => {
           organizationId,
           code: parsed.data.code,
           name: parsed.data.name,
+          description: parsed.data.description?.trim() || null,
           active: parsed.data.active ?? true,
           fields
         })
@@ -259,6 +261,7 @@ router.put('/organizations/:id/asset-cards/:assetCardId', (req, res) => {
           assetCardId,
           code: parsed.data.code,
           name: parsed.data.name,
+          description: parsed.data.description?.trim() || null,
           active: parsed.data.active ?? true,
           fields
         })
@@ -310,4 +313,3 @@ router.delete('/organizations/:id/asset-cards/:assetCardId', (req, res) => {
 });
 
 export default router;
-

@@ -1,6 +1,6 @@
 import db from '../db/knex.js';
 
-const ASSET_CARD_COLUMNS = ['id', 'organization_id', 'code', 'name', 'active', 'created_at', 'updated_at'];
+const ASSET_CARD_COLUMNS = ['id', 'organization_id', 'code', 'name', 'description', 'active', 'created_at', 'updated_at'];
 const ASSET_CARD_FIELD_COLUMNS = [
   'id',
   'organization_id',
@@ -116,12 +116,13 @@ export async function listAssetCardsByOrganization(organizationId, { active, q, 
   return attachFields(rows, fields);
 }
 
-export async function createAssetCard(trx, { organizationId, code, name, active, fields }) {
+export async function createAssetCard(trx, { organizationId, code, name, description, active, fields }) {
   const rows = await trx('asset_cards')
     .insert({
       organization_id: organizationId,
       code,
       name,
+      description: description ?? null,
       active: active ?? true
     })
     .returning(ASSET_CARD_COLUMNS);
@@ -131,12 +132,13 @@ export async function createAssetCard(trx, { organizationId, code, name, active,
   return { ...assetCard, fields: fieldRows };
 }
 
-export async function updateAssetCard(trx, { organizationId, assetCardId, code, name, active, fields }) {
+export async function updateAssetCard(trx, { organizationId, assetCardId, code, name, description, active, fields }) {
   const rows = await trx('asset_cards')
     .where({ id: assetCardId, organization_id: organizationId })
     .update({
       code,
       name,
+      description: description ?? null,
       active: active ?? true,
       updated_at: trx.fn.now()
     })
@@ -164,4 +166,3 @@ export async function listAssetCardFieldsByAssetCard(organizationId, assetCardId
 
   return query;
 }
-
