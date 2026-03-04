@@ -1,4 +1,5 @@
 import db from '../db/knex.js';
+import { buildPaginationMeta } from '../utils/pagination.js';
 
 function inventoryItemSelectColumns(dbOrTrx) {
   return [
@@ -27,10 +28,13 @@ function inventoryItemQueryWithCards(dbOrTrx) {
   });
 }
 
-export async function listInventoryItemsByOrganization(organizationId, { active, warehouseTypeId, warehouseTypeCode } = {}) {
+export async function listInventoryItemsByOrganization(
+  organizationId,
+  { active, warehouseTypeId, warehouseTypeCode, q, code, name, description, brand, model, typeName, specification, sortField, sortOrder, page, pageSize } = {}
+) {
   const query = inventoryItemQueryWithCards(db)
     .where({ 'ii.organization_id': organizationId })
-    .orderBy([{ column: 'ii.active', order: 'desc' }, { column: 'ii.name', order: 'asc' }])
+    .orderBy(resolveInventoryItemOrder(sortField, sortOrder))
     .select(inventoryItemSelectColumns(db));
 
   if (typeof active === 'boolean') query.andWhere({ 'ii.active': active });
@@ -51,7 +55,69 @@ export async function listInventoryItemsByOrganization(organizationId, { active,
     );
   }
 
-  return query;
+  applyInventoryItemTextFilters(query, { q, code, name, description, brand, model, typeName, specification });
+
+  if (!Number.isFinite(page) || !Number.isFinite(pageSize)) return query;
+
+  const [{ count }] = await query.clone().clearSelect().clearOrder().countDistinct({ count: 'ii.id' });
+  const rows = await query.clone().limit(pageSize).offset((page - 1) * pageSize);
+  return { rows, pagination: buildPaginationMeta(count, page, pageSize) };
+}
+
+function applyInventoryItemTextFilters(query, { q, code, name, description, brand, model, typeName, specification }) {
+  const globalText = normalizeSearchText(q);
+  if (globalText) {
+    query.andWhere((builder) =>
+      builder
+        .whereRaw('ii.code ilike ?', [`%${globalText}%`])
+        .orWhereRaw('ii.name ilike ?', [`%${globalText}%`])
+        .orWhereRaw('ii.description ilike ?', [`%${globalText}%`])
+        .orWhereRaw('ii.brand ilike ?', [`%${globalText}%`])
+        .orWhereRaw('ii.model ilike ?', [`%${globalText}%`])
+        .orWhereRaw('iic.type_name ilike ?', [`%${globalText}%`])
+        .orWhereRaw('iic.specification ilike ?', [`%${globalText}%`])
+    );
+  }
+
+  const filters = [
+    ['ii.code', code],
+    ['ii.name', name],
+    ['ii.description', description],
+    ['ii.brand', brand],
+    ['ii.model', model],
+    ['iic.type_name', typeName],
+    ['iic.specification', specification]
+  ];
+
+  for (const [column, value] of filters) {
+    const text = normalizeSearchText(value);
+    if (text) query.andWhereRaw(`${column} ilike ?`, [`%${text}%`]);
+  }
+}
+
+function normalizeSearchText(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function resolveInventoryItemOrder(sortField, sortOrder) {
+  const direction = String(sortOrder ?? '').toLowerCase() === 'desc' ? 'desc' : 'asc';
+  const columnMap = {
+    code: 'ii.code',
+    name: 'ii.name',
+    brand: 'ii.brand',
+    model: 'ii.model',
+    type_name: 'iic.type_name',
+    specification: 'iic.specification',
+    amount_unit_id: 'ii.amount_unit_id',
+    active: 'ii.active'
+  };
+  const column = columnMap[sortField] ?? 'ii.name';
+
+  return [
+    { column: 'ii.active', order: 'desc' },
+    { column, order: direction },
+    { column: 'ii.id', order: 'asc' }
+  ];
 }
 
 export async function getInventoryItemById(id) {

@@ -17,6 +17,7 @@ import {
   updateAssetLocation,
   updateAssetState
 } from '../models/assets.js';
+import { parsePaginationQuery } from '../utils/pagination.js';
 import {
   createAssetBomLine,
   deleteAssetBomLine,
@@ -193,10 +194,35 @@ router.get('/organizations/:id/assets', (req, res) => {
   const parentAssetId = parentAssetIdRaw === undefined ? undefined : parentAssetIdRaw === 'null' ? null : Number(parentAssetIdRaw);
   const active = activeRaw === undefined ? undefined : activeRaw.toLowerCase() === 'true';
   const resolvedAssetCardId = assetCardId ?? assetTypeId;
+  const pagination = parsePaginationQuery(req.query, { defaultPageSize: 12, maxPageSize: 100 });
+  const q = typeof req.query.q === 'string' ? req.query.q : undefined;
+  const name = typeof req.query.name === 'string' ? req.query.name : undefined;
+  const code = typeof req.query.code === 'string' ? req.query.code : undefined;
+  const currentState = typeof req.query.currentState === 'string' ? req.query.currentState : undefined;
+  const sortField = typeof req.query.sortField === 'string' ? req.query.sortField : undefined;
+  const sortOrder = typeof req.query.sortOrder === 'string' ? req.query.sortOrder : undefined;
 
   return Promise.resolve()
-    .then(() => listAssetsByOrganization(organizationId, { locationId, parentAssetId, assetCardId: resolvedAssetCardId, active }))
-    .then((assets) => res.status(200).json({ assets }))
+    .then(() =>
+      listAssetsByOrganization(organizationId, {
+        locationId,
+        parentAssetId,
+        assetCardId: resolvedAssetCardId,
+        active,
+        q,
+        name,
+        code,
+        currentState,
+        sortField,
+        sortOrder,
+        page: pagination.enabled ? pagination.page : undefined,
+        pageSize: pagination.enabled ? pagination.pageSize : undefined
+      })
+    )
+    .then((result) => {
+      if (pagination.enabled) return res.status(200).json({ assets: result.rows, pagination: result.pagination });
+      return res.status(200).json({ assets: result });
+    })
     .catch(() => res.status(500).json({ message: 'Failed to fetch assets' }));
 });
 

@@ -65,6 +65,13 @@ Contract docs:
   - use event + lines model, node ids are required for movements.
   - keep `POSTED` immutability rule in mind for corrections.
 
+## Pagination Rule (Required)
+
+- Server-side pagination is mandatory for list endpoints that expose user-facing collections expected to grow over time.
+- New list routes must support paginated reads; do not add new full-fetch list APIs for primary UI tables.
+- Pagination, filter, and sort query params must be documented in `../docs/contracts/API.md` in the same change.
+- When changing an existing list endpoint, preserve pagination behavior across route, model, and frontend consumption together.
+
 ## Change Checklist
 
 After backend changes:

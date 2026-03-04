@@ -1,4 +1,5 @@
 import db from '../db/knex.js';
+import { buildPaginationMeta } from '../utils/pagination.js';
 
 const INVENTORY_ITEM_CARD_COLUMNS = [
   'id',
@@ -90,15 +91,14 @@ async function replaceInventoryItemCardFields(trx, { organizationId, inventoryIt
   });
 }
 
-export async function listInventoryItemCardsByOrganization(organizationId, { active, q, warehouseTypeId, warehouseTypeCode } = {}) {
+export async function listInventoryItemCardsByOrganization(
+  organizationId,
+  { active, q, code, name, typeName, specification, warehouseTypeId, warehouseTypeIds, warehouseTypeCode, sortField, sortOrder, page, pageSize } = {}
+) {
   const query = db('inventory_item_cards')
     .where({ organization_id: organizationId })
     .select(INVENTORY_ITEM_CARD_COLUMNS)
-    .orderBy([
-      { column: 'active', order: 'desc' },
-      { column: 'name', order: 'asc' },
-      { column: 'id', order: 'asc' }
-    ]);
+    .orderBy(resolveInventoryItemCardOrder(sortField, sortOrder));
 
   if (typeof active === 'boolean') query.andWhere({ active });
 
@@ -113,9 +113,28 @@ export async function listInventoryItemCardsByOrganization(organizationId, { act
     );
   }
 
+  const codeText = normalizeSearchText(code);
+  if (codeText) query.andWhereRaw('code ilike ?', [`%${codeText}%`]);
+
+  const nameText = normalizeSearchText(name);
+  if (nameText) query.andWhereRaw('name ilike ?', [`%${nameText}%`]);
+
+  const typeNameText = normalizeSearchText(typeName);
+  if (typeNameText) query.andWhereRaw('type_name ilike ?', [`%${typeNameText}%`]);
+
+  const specificationText = normalizeSearchText(specification);
+  if (specificationText) query.andWhereRaw('specification ilike ?', [`%${specificationText}%`]);
+
   const parsedWarehouseTypeId = Number(warehouseTypeId);
   if (Number.isFinite(parsedWarehouseTypeId) && parsedWarehouseTypeId > 0) {
     query.andWhere({ warehouse_type_id: parsedWarehouseTypeId });
+  }
+
+  const parsedWarehouseTypeIds = Array.isArray(warehouseTypeIds)
+    ? warehouseTypeIds.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0)
+    : [];
+  if (parsedWarehouseTypeIds.length > 0) {
+    query.whereIn('warehouse_type_id', parsedWarehouseTypeIds);
   }
 
   const warehouseTypeCodeText = typeof warehouseTypeCode === 'string' ? warehouseTypeCode.trim() : '';
@@ -129,12 +148,54 @@ export async function listInventoryItemCardsByOrganization(organizationId, { act
     );
   }
 
-  const rows = await query;
+  if (!Number.isFinite(page) || !Number.isFinite(pageSize)) {
+    const rows = await query;
+    const hasFieldsTable = await db.schema.hasTable('inventory_item_card_fields');
+    if (!hasFieldsTable) return rows.map((row) => ({ ...row, fields: [] }));
+
+    const fields = await listInventoryItemCardFieldsByIds(db, organizationId, rows.map((row) => row.id));
+    return attachFields(rows, fields);
+  }
+
+  const [{ count }] = await query.clone().clearSelect().clearOrder().count({ count: 'id' });
+  const rows = await query.clone().limit(pageSize).offset((page - 1) * pageSize);
   const hasFieldsTable = await db.schema.hasTable('inventory_item_card_fields');
-  if (!hasFieldsTable) return rows.map((row) => ({ ...row, fields: [] }));
+  if (!hasFieldsTable) {
+    return {
+      rows: rows.map((row) => ({ ...row, fields: [] })),
+      pagination: buildPaginationMeta(count, page, pageSize)
+    };
+  }
 
   const fields = await listInventoryItemCardFieldsByIds(db, organizationId, rows.map((row) => row.id));
-  return attachFields(rows, fields);
+  return {
+    rows: attachFields(rows, fields),
+    pagination: buildPaginationMeta(count, page, pageSize)
+  };
+}
+
+function normalizeSearchText(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function resolveInventoryItemCardOrder(sortField, sortOrder) {
+  const direction = String(sortOrder ?? '').toLowerCase() === 'desc' ? 'desc' : 'asc';
+  const columnMap = {
+    code: 'code',
+    name: 'name',
+    type_name: 'type_name',
+    specification: 'specification',
+    amount_unit_id: 'amount_unit_id',
+    warehouse_type_id: 'warehouse_type_id',
+    active: 'active'
+  };
+  const column = columnMap[sortField] ?? 'name';
+
+  return [
+    { column: 'active', order: 'desc' },
+    { column, order: direction },
+    { column: 'id', order: 'asc' }
+  ];
 }
 
 export async function getInventoryItemCardById(id) {

@@ -11,6 +11,7 @@ import {
   listInventoryItemCardsByOrganization,
   updateInventoryItemCard
 } from '../models/inventoryItemCards.js';
+import { parsePaginationQuery } from '../utils/pagination.js';
 
 const router = Router();
 router.use('/organizations/:id', loadOrganizationContext);
@@ -133,12 +134,41 @@ router.get('/organizations/:id/inventory-item-cards', (req, res) => {
   const active = activeText ? activeText === 'true' : undefined;
 
   const q = typeof req.query.q === 'string' ? req.query.q : undefined;
+  const code = typeof req.query.code === 'string' ? req.query.code : undefined;
+  const name = typeof req.query.name === 'string' ? req.query.name : undefined;
+  const typeName = typeof req.query.typeName === 'string' ? req.query.typeName : undefined;
+  const specification = typeof req.query.specification === 'string' ? req.query.specification : undefined;
   const warehouseTypeId = typeof req.query.warehouseTypeId === 'string' ? req.query.warehouseTypeId : undefined;
+  const warehouseTypeIds = typeof req.query.warehouseTypeIds === 'string'
+    ? req.query.warehouseTypeIds.split(',').map((value) => value.trim()).filter((value) => value.length > 0)
+    : undefined;
   const warehouseTypeCode = typeof req.query.warehouseTypeCode === 'string' ? req.query.warehouseTypeCode : undefined;
+  const pagination = parsePaginationQuery(req.query, { defaultPageSize: 12, maxPageSize: 100 });
+  const sortField = typeof req.query.sortField === 'string' ? req.query.sortField : undefined;
+  const sortOrder = typeof req.query.sortOrder === 'string' ? req.query.sortOrder : undefined;
 
   return Promise.resolve()
-    .then(() => listInventoryItemCardsByOrganization(organizationId, { active, q, warehouseTypeId, warehouseTypeCode }))
-    .then((inventoryItemCards) => res.status(200).json({ inventory_item_cards: inventoryItemCards }))
+    .then(() =>
+      listInventoryItemCardsByOrganization(organizationId, {
+        active,
+        q,
+        code,
+        name,
+        typeName,
+        specification,
+        warehouseTypeId,
+        warehouseTypeIds,
+        warehouseTypeCode,
+        sortField,
+        sortOrder,
+        page: pagination.enabled ? pagination.page : undefined,
+        pageSize: pagination.enabled ? pagination.pageSize : undefined
+      })
+    )
+    .then((result) => {
+      if (pagination.enabled) return res.status(200).json({ inventory_item_cards: result.rows, pagination: result.pagination });
+      return res.status(200).json({ inventory_item_cards: result });
+    })
     .catch((err) => {
       const hint = inferSchemaHint(err);
       if (hint) return res.status(500).json({ message: hint });

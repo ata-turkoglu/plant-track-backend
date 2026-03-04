@@ -7,6 +7,7 @@ import { getInventoryItemCardById } from '../models/inventoryItemCards.js';
 import { getUnitById } from '../models/units.js';
 import { getWarehouseTypeById } from '../models/warehouseTypes.js';
 import { loadOrganizationContext } from '../middleware/organizationContext.js';
+import { parsePaginationQuery } from '../utils/pagination.js';
 
 const router = Router();
 router.use('/organizations/:id', loadOrganizationContext);
@@ -98,11 +99,41 @@ router.get('/organizations/:id/inventory-items', (req, res) => {
   }
 
   const warehouseTypeCode = typeof req.query.warehouseTypeCode === 'string' ? req.query.warehouseTypeCode.trim() : undefined;
+  const pagination = parsePaginationQuery(req.query, { defaultPageSize: 12, maxPageSize: 100 });
+  const q = typeof req.query.q === 'string' ? req.query.q : undefined;
+  const code = typeof req.query.code === 'string' ? req.query.code : undefined;
+  const name = typeof req.query.name === 'string' ? req.query.name : undefined;
+  const description = typeof req.query.description === 'string' ? req.query.description : undefined;
+  const brand = typeof req.query.brand === 'string' ? req.query.brand : undefined;
+  const model = typeof req.query.model === 'string' ? req.query.model : undefined;
+  const typeName = typeof req.query.typeName === 'string' ? req.query.typeName : undefined;
+  const specification = typeof req.query.specification === 'string' ? req.query.specification : undefined;
+  const sortField = typeof req.query.sortField === 'string' ? req.query.sortField : undefined;
+  const sortOrder = typeof req.query.sortOrder === 'string' ? req.query.sortOrder : undefined;
 
   return Promise.resolve()
-    .then(() => listInventoryItemsByOrganization(organizationId, { active, warehouseTypeId, warehouseTypeCode }))
-    .then((inventoryItems) => {
-      return res.status(200).json({ inventory_items: inventoryItems });
+    .then(() =>
+      listInventoryItemsByOrganization(organizationId, {
+        active,
+        warehouseTypeId,
+        warehouseTypeCode,
+        q,
+        code,
+        name,
+        description,
+        brand,
+        model,
+        typeName,
+        specification,
+        sortField,
+        sortOrder,
+        page: pagination.enabled ? pagination.page : undefined,
+        pageSize: pagination.enabled ? pagination.pageSize : undefined
+      })
+    )
+    .then((result) => {
+      if (pagination.enabled) return res.status(200).json({ inventory_items: result.rows, pagination: result.pagination });
+      return res.status(200).json({ inventory_items: result });
     })
     .catch(() => res.status(500).json({ message: 'Failed to fetch inventory items' }));
 });

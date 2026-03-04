@@ -1,9 +1,13 @@
 import db from '../db/knex.js';
+import { buildPaginationMeta } from '../utils/pagination.js';
 
-export async function listFirmsByOrganization(organizationId) {
-  return db('firms')
+export async function listFirmsByOrganization(
+  organizationId,
+  { q, name, email, phone, active, sortField, sortOrder, page, pageSize } = {}
+) {
+  const query = db('firms')
     .where({ organization_id: organizationId })
-    .orderBy([{ column: 'name', order: 'asc' }])
+    .orderBy(resolveFirmOrder(sortField, sortOrder))
     .select([
       'id',
       'organization_id',
@@ -18,6 +22,53 @@ export async function listFirmsByOrganization(organizationId) {
       'created_at',
       'updated_at'
     ]);
+
+  if (typeof active === 'boolean') query.andWhere({ active });
+
+  const globalText = normalizeSearchText(q);
+  if (globalText) {
+    query.andWhere((builder) =>
+      builder
+        .whereRaw('name ilike ?', [`%${globalText}%`])
+        .orWhereRaw('email ilike ?', [`%${globalText}%`])
+        .orWhereRaw('phone ilike ?', [`%${globalText}%`])
+    );
+  }
+
+  const nameText = normalizeSearchText(name);
+  if (nameText) query.andWhereRaw('name ilike ?', [`%${nameText}%`]);
+
+  const emailText = normalizeSearchText(email);
+  if (emailText) query.andWhereRaw('email ilike ?', [`%${emailText}%`]);
+
+  const phoneText = normalizeSearchText(phone);
+  if (phoneText) query.andWhereRaw('phone ilike ?', [`%${phoneText}%`]);
+
+  if (!Number.isFinite(page) || !Number.isFinite(pageSize)) return query;
+
+  const [{ count }] = await query.clone().clearSelect().clearOrder().count({ count: 'id' });
+  const rows = await query.clone().limit(pageSize).offset((page - 1) * pageSize);
+  return { rows, pagination: buildPaginationMeta(count, page, pageSize) };
+}
+
+function normalizeSearchText(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function resolveFirmOrder(sortField, sortOrder) {
+  const direction = String(sortOrder ?? '').toLowerCase() === 'desc' ? 'desc' : 'asc';
+  const columnMap = {
+    name: 'name',
+    email: 'email',
+    phone: 'phone',
+    active: 'active'
+  };
+  const column = columnMap[sortField] ?? 'name';
+
+  return [
+    { column, order: direction },
+    { column: 'id', order: direction }
+  ];
 }
 
 export async function getFirmById(id) {
@@ -129,4 +180,3 @@ export async function findFirmConflict(organizationId, { name, email, phone, exc
 
   return query.first(['id', 'name', 'email', 'phone']);
 }
-

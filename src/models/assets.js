@@ -1,11 +1,12 @@
 import db from '../db/knex.js';
+import { buildPaginationMeta } from '../utils/pagination.js';
 
 export async function listAssetsByOrganization(
   organizationId,
-  { locationId, parentAssetId, assetCardId, assetTypeId, active } = {}
+  { locationId, parentAssetId, assetCardId, assetTypeId, active, q, name, code, currentState, sortField, sortOrder, page, pageSize } = {}
 ) {
   const resolvedAssetCardId = assetCardId ?? assetTypeId;
-  const q = db('assets')
+  const query = db('assets')
     .where({ organization_id: organizationId })
     .select([
       'id',
@@ -24,16 +25,64 @@ export async function listAssetsByOrganization(
       'created_at',
       'updated_at'
     ])
-    .orderBy([{ column: 'name', order: 'asc' }, { column: 'id', order: 'asc' }]);
+    .orderBy(resolveAssetOrder(sortField, sortOrder));
 
-  if (typeof active === 'boolean') q.andWhere({ active });
-  if (Number.isFinite(Number(locationId))) q.andWhere({ location_id: Number(locationId) });
-  if (Number.isFinite(Number(resolvedAssetCardId))) q.andWhere({ asset_card_id: Number(resolvedAssetCardId) });
+  if (typeof active === 'boolean') query.andWhere({ active });
+  if (Number.isFinite(Number(locationId))) query.andWhere({ location_id: Number(locationId) });
+  if (Number.isFinite(Number(resolvedAssetCardId))) query.andWhere({ asset_card_id: Number(resolvedAssetCardId) });
 
-  if (parentAssetId === null) q.whereNull('parent_asset_id');
-  if (Number.isFinite(Number(parentAssetId))) q.andWhere({ parent_asset_id: Number(parentAssetId) });
+  if (parentAssetId === null) query.whereNull('parent_asset_id');
+  if (Number.isFinite(Number(parentAssetId))) query.andWhere({ parent_asset_id: Number(parentAssetId) });
 
-  return q;
+  applyAssetTextFilters(query, { q, name, code, currentState });
+
+  if (!Number.isFinite(page) || !Number.isFinite(pageSize)) return query;
+
+  const [{ count }] = await query.clone().clearSelect().clearOrder().count({ count: 'id' });
+  const rows = await query.clone().limit(pageSize).offset((page - 1) * pageSize);
+  return { rows, pagination: buildPaginationMeta(count, page, pageSize) };
+}
+
+function applyAssetTextFilters(query, { q, name, code, currentState }) {
+  const globalText = normalizeSearchText(q);
+  if (globalText) {
+    query.andWhere((builder) =>
+      builder
+        .whereRaw('name ilike ?', [`%${globalText}%`])
+        .orWhereRaw('code ilike ?', [`%${globalText}%`])
+        .orWhereRaw('current_state ilike ?', [`%${globalText}%`])
+    );
+  }
+
+  const nameText = normalizeSearchText(name);
+  if (nameText) query.andWhereRaw('name ilike ?', [`%${nameText}%`]);
+
+  const codeText = normalizeSearchText(code);
+  if (codeText) query.andWhereRaw('code ilike ?', [`%${codeText}%`]);
+
+  const currentStateText = normalizeSearchText(currentState);
+  if (currentStateText) query.andWhereRaw('current_state ilike ?', [`%${currentStateText}%`]);
+}
+
+function normalizeSearchText(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function resolveAssetOrder(sortField, sortOrder) {
+  const direction = String(sortOrder ?? '').toLowerCase() === 'desc' ? 'desc' : 'asc';
+  const columnMap = {
+    name: 'name',
+    code: 'code',
+    current_state: 'current_state',
+    active: 'active',
+    runtime_seconds: 'runtime_seconds'
+  };
+  const column = columnMap[sortField] ?? 'name';
+
+  return [
+    { column, order: direction },
+    { column: 'id', order: direction }
+  ];
 }
 
 export async function getAssetById(organizationId, assetId) {

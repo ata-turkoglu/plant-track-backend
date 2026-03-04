@@ -5,17 +5,44 @@ import db from '../db/knex.js';
 import { createFirm, deleteFirm, findFirmConflict, getFirmById, listFirmsByOrganization, updateFirm } from '../models/firms.js';
 import { deleteRefNode, findNodeByRef, upsertRefNode } from '../models/nodes.js';
 import { loadOrganizationContext } from '../middleware/organizationContext.js';
+import { parsePaginationQuery } from '../utils/pagination.js';
 
 const router = Router();
 router.use('/organizations/:id', loadOrganizationContext);
 
 router.get('/organizations/:id/firms', (req, res) => {
   const organizationId = req.organizationId;
+  const activeText = typeof req.query.active === 'string' ? req.query.active.trim().toLowerCase() : '';
+  if (activeText && activeText !== 'true' && activeText !== 'false') {
+    return res.status(400).json({ message: 'Invalid active filter. Use true or false.' });
+  }
+
+  const pagination = parsePaginationQuery(req.query, { defaultPageSize: 12, maxPageSize: 100 });
+  const q = typeof req.query.q === 'string' ? req.query.q : undefined;
+  const name = typeof req.query.name === 'string' ? req.query.name : undefined;
+  const email = typeof req.query.email === 'string' ? req.query.email : undefined;
+  const phone = typeof req.query.phone === 'string' ? req.query.phone : undefined;
+  const active = activeText ? activeText === 'true' : undefined;
+  const sortField = typeof req.query.sortField === 'string' ? req.query.sortField : undefined;
+  const sortOrder = typeof req.query.sortOrder === 'string' ? req.query.sortOrder : undefined;
 
   return Promise.resolve()
-    .then(() => listFirmsByOrganization(organizationId))
-    .then((firms) => {
-      return res.status(200).json({ firms });
+    .then(() =>
+      listFirmsByOrganization(organizationId, {
+        q,
+        name,
+        email,
+        phone,
+        active,
+        sortField,
+        sortOrder,
+        page: pagination.enabled ? pagination.page : undefined,
+        pageSize: pagination.enabled ? pagination.pageSize : undefined
+      })
+    )
+    .then((result) => {
+      if (pagination.enabled) return res.status(200).json({ firms: result.rows, pagination: result.pagination });
+      return res.status(200).json({ firms: result });
     })
     .catch(() => res.status(500).json({ message: 'Failed to fetch firms' }));
 });
