@@ -266,6 +266,14 @@ export async function updateInventoryItemCard(
 
   if (!inventoryItemCard) return null;
 
+  await trx('inventory_items')
+    .where({ organization_id: organizationId, inventory_item_card_id: inventoryItemCardId })
+    .update({
+      warehouse_type_id: warehouseTypeId,
+      amount_unit_id: amountUnitId,
+      updated_at: trx.fn.now()
+    });
+
   const fieldRows = await replaceInventoryItemCardFields(trx, { organizationId, inventoryItemCardId, fields });
   return { ...inventoryItemCard, fields: fieldRows };
 }
