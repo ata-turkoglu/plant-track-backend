@@ -32,8 +32,6 @@ function isUniqueViolation(err) {
 
 router.get('/organizations/:id/asset-cards', (req, res) => {
   const organizationId = req.organizationId;
-  const activeParam = typeof req.query.active === 'string' ? req.query.active : undefined;
-  const active = activeParam === undefined ? undefined : activeParam.toLowerCase() === 'true';
 
   return Promise.resolve()
     .then(() => {
@@ -42,7 +40,7 @@ router.get('/organizations/:id/asset-cards', (req, res) => {
       const name = typeof req.query.name === 'string' ? req.query.name : undefined;
       const hasSchemaParam = typeof req.query.hasSchema === 'string' ? req.query.hasSchema : undefined;
       const hasSchema = hasSchemaParam === undefined ? undefined : hasSchemaParam.toLowerCase() === 'true';
-      return listAssetCardsByOrganization(organizationId, { active, q, code, name, hasSchema });
+      return listAssetCardsByOrganization(organizationId, { q, code, name, hasSchema });
     })
     .then((assetCards) => res.status(200).json({ assetCards }))
     .catch((err) => {
@@ -112,14 +110,12 @@ function normalizeFields(rows) {
     const label = (typeof raw.label === 'string' ? raw.label : '').trim();
     const required = Boolean(raw.required);
     const unitId = normalizeUnitId(raw.unit_id);
-    const active = raw.active == null ? true : Boolean(raw.active);
     const rawDataType = raw.data_type;
     const hasAny = Boolean(
       rawName ||
         label ||
         required ||
         unitId != null ||
-        active === false ||
         (typeof rawDataType === 'string' && rawDataType !== 'text')
     );
 
@@ -142,8 +138,7 @@ function normalizeFields(rows) {
       dataType: normalizeDataType(raw.data_type),
       required,
       unitId,
-      sortOrder: Number.isFinite(Number(raw.sort_order)) ? Number(raw.sort_order) : idx,
-      active
+      sortOrder: Number.isFinite(Number(raw.sort_order)) ? Number(raw.sort_order) : idx
     });
   }
 
@@ -159,7 +154,6 @@ function normalizeFields(rows) {
       required: false,
       unitId: null,
       sortOrder: normalized.length,
-      active: true,
       isDefault: true
     });
   }
@@ -178,7 +172,6 @@ const upsertSchema = z.object({
   code: z.string().trim().min(1).max(64),
   name: z.string().trim().min(1).max(255),
   description: z.string().max(10_000).optional().nullable(),
-  active: z.boolean().optional(),
   fields: z
     .array(
       z.object({
@@ -188,8 +181,7 @@ const upsertSchema = z.object({
         data_type: z.enum(FIELD_DATA_TYPES).optional(),
         required: z.boolean().optional(),
         unit_id: z.number().int().positive().optional().nullable(),
-        sort_order: z.number().int().optional(),
-        active: z.boolean().optional()
+        sort_order: z.number().int().optional()
       })
     )
     .optional()
@@ -215,7 +207,6 @@ router.post('/organizations/:id/asset-cards', (req, res) => {
           code: parsed.data.code,
           name: parsed.data.name,
           description: parsed.data.description?.trim() || null,
-          active: parsed.data.active ?? true,
           fields
         })
       );
@@ -262,7 +253,6 @@ router.put('/organizations/:id/asset-cards/:assetCardId', (req, res) => {
           code: parsed.data.code,
           name: parsed.data.name,
           description: parsed.data.description?.trim() || null,
-          active: parsed.data.active ?? true,
           fields
         })
       );

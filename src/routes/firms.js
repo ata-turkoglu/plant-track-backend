@@ -12,17 +12,11 @@ router.use('/organizations/:id', loadOrganizationContext);
 
 router.get('/organizations/:id/firms', (req, res) => {
   const organizationId = req.organizationId;
-  const activeText = typeof req.query.active === 'string' ? req.query.active.trim().toLowerCase() : '';
-  if (activeText && activeText !== 'true' && activeText !== 'false') {
-    return res.status(400).json({ message: 'Invalid active filter. Use true or false.' });
-  }
-
   const pagination = parsePaginationQuery(req.query, { defaultPageSize: 12, maxPageSize: 100 });
   const q = typeof req.query.q === 'string' ? req.query.q : undefined;
   const name = typeof req.query.name === 'string' ? req.query.name : undefined;
   const email = typeof req.query.email === 'string' ? req.query.email : undefined;
   const phone = typeof req.query.phone === 'string' ? req.query.phone : undefined;
-  const active = activeText ? activeText === 'true' : undefined;
   const sortField = typeof req.query.sortField === 'string' ? req.query.sortField : undefined;
   const sortOrder = typeof req.query.sortOrder === 'string' ? req.query.sortOrder : undefined;
 
@@ -33,7 +27,6 @@ router.get('/organizations/:id/firms', (req, res) => {
         name,
         email,
         phone,
-        active,
         sortField,
         sortOrder,
         page: pagination.enabled ? pagination.page : undefined,
@@ -54,13 +47,11 @@ const upsertSchema = z.object({
   address: z.string().max(4000).optional().nullable(),
   tax_no: z.string().max(64).optional().nullable(),
   contact_name: z.string().max(255).optional().nullable(),
-  notes: z.string().max(8000).optional().nullable(),
-  active: z.boolean().optional()
+  notes: z.string().max(8000).optional().nullable()
 });
 
 function buildFirmNodeMeta(firm) {
   return {
-    active: firm.active,
     email: firm.email ?? null,
     phone: firm.phone ?? null
   };
@@ -103,8 +94,7 @@ router.post('/organizations/:id/firms', (req, res) => {
           address: parsed.data.address ?? null,
           taxNo: parsed.data.tax_no ?? null,
           contactName: parsed.data.contact_name ?? null,
-          notes: parsed.data.notes ?? null,
-          active: parsed.data.active
+          notes: parsed.data.notes ?? null
         }).then(async (created) => {
           await upsertRefNode(trx, {
             organizationId,
@@ -164,8 +154,7 @@ router.put('/organizations/:id/firms/:firmId', (req, res) => {
           address: parsed.data.address ?? null,
           taxNo: parsed.data.tax_no ?? null,
           contactName: parsed.data.contact_name ?? null,
-          notes: parsed.data.notes ?? null,
-          active: parsed.data.active ?? true
+          notes: parsed.data.notes ?? null
         }).then(async (updated) => {
           if (!updated) return null;
           await upsertRefNode(trx, {

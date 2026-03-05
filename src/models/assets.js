@@ -3,7 +3,7 @@ import { buildPaginationMeta } from '../utils/pagination.js';
 
 export async function listAssetsByOrganization(
   organizationId,
-  { locationId, parentAssetId, assetCardId, assetTypeId, active, q, name, code, currentState, sortField, sortOrder, page, pageSize } = {}
+  { locationId, parentAssetId, assetCardId, assetTypeId, q, name, code, currentState, sortField, sortOrder, page, pageSize } = {}
 ) {
   const resolvedAssetCardId = assetCardId ?? assetTypeId;
   const query = db('assets')
@@ -17,7 +17,6 @@ export async function listAssetsByOrganization(
       'code',
       'name',
       'image_url',
-      'active',
       'current_state',
       'running_since',
       'runtime_seconds',
@@ -27,7 +26,6 @@ export async function listAssetsByOrganization(
     ])
     .orderBy(resolveAssetOrder(sortField, sortOrder));
 
-  if (typeof active === 'boolean') query.andWhere({ active });
   if (Number.isFinite(Number(locationId))) query.andWhere({ location_id: Number(locationId) });
   if (Number.isFinite(Number(resolvedAssetCardId))) query.andWhere({ asset_card_id: Number(resolvedAssetCardId) });
 
@@ -74,7 +72,6 @@ function resolveAssetOrder(sortField, sortOrder) {
     name: 'name',
     code: 'code',
     current_state: 'current_state',
-    active: 'active',
     runtime_seconds: 'runtime_seconds'
   };
   const column = columnMap[sortField] ?? 'name';
@@ -97,7 +94,6 @@ export async function getAssetById(organizationId, assetId) {
       'code',
       'name',
       'image_url',
-      'active',
       'current_state',
       'running_since',
       'runtime_seconds',
@@ -109,7 +105,7 @@ export async function getAssetById(organizationId, assetId) {
 
 export async function createAsset(
   trx,
-  { organizationId, locationId, parentAssetId, assetCardId, assetTypeId, code, name, imageUrl, active, attributesJson }
+  { organizationId, locationId, parentAssetId, assetCardId, assetTypeId, code, name, imageUrl, attributesJson }
 ) {
   const resolvedAssetCardId = assetCardId ?? assetTypeId;
   const rows = await trx('assets')
@@ -121,7 +117,6 @@ export async function createAsset(
       code: code ?? null,
       name,
       image_url: imageUrl ?? null,
-      active: active ?? true,
       attributes_json: attributesJson ?? null,
       current_state: 'STOPPED',
       running_since: null,
@@ -136,7 +131,6 @@ export async function createAsset(
       'code',
       'name',
       'image_url',
-      'active',
       'current_state',
       'running_since',
       'runtime_seconds',
@@ -150,7 +144,7 @@ export async function createAsset(
 
 export async function updateAsset(
   trx,
-  { organizationId, assetId, parentAssetId, assetCardId, assetTypeId, code, name, imageUrl, active, attributesJson }
+  { organizationId, assetId, parentAssetId, assetCardId, assetTypeId, code, name, imageUrl, attributesJson }
 ) {
   const resolvedAssetCardId = assetCardId ?? assetTypeId;
   const rows = await trx('assets')
@@ -161,7 +155,6 @@ export async function updateAsset(
       code: code ?? null,
       name,
       image_url: imageUrl ?? null,
-      active: active ?? true,
       attributes_json: attributesJson ?? null,
       updated_at: trx.fn.now()
     })
@@ -174,7 +167,6 @@ export async function updateAsset(
       'code',
       'name',
       'image_url',
-      'active',
       'current_state',
       'running_since',
       'runtime_seconds',
@@ -195,7 +187,7 @@ export async function lockAssetForUpdate(trx, { organizationId, assetId }) {
   return trx('assets')
     .where({ id: assetId, organization_id: organizationId })
     .forUpdate()
-    .first(['id', 'location_id', 'current_state', 'running_since', 'runtime_seconds', 'active', 'code', 'name', 'asset_card_id', 'parent_asset_id']);
+    .first(['id', 'location_id', 'current_state', 'running_since', 'runtime_seconds', 'code', 'name', 'asset_card_id', 'parent_asset_id']);
 }
 
 export async function updateAssetLocation(trx, { organizationId, assetId, toLocationId }) {
@@ -211,7 +203,6 @@ export async function updateAssetLocation(trx, { organizationId, assetId, toLoca
       'code',
       'name',
       'image_url',
-      'active',
       'current_state',
       'running_since',
       'runtime_seconds',
@@ -248,7 +239,6 @@ export async function updateAssetState(trx, { organizationId, assetId, currentSt
       'code',
       'name',
       'image_url',
-      'active',
       'current_state',
       'running_since',
       'runtime_seconds',

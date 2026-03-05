@@ -31,7 +31,6 @@ router.use('/organizations/:id', loadOrganizationContext);
 
 function buildAssetNodeMeta(asset) {
   return {
-    active: asset.active,
     location_id: asset.location_id ?? null,
     parent_asset_id: asset.parent_asset_id ?? null,
     asset_card_id: asset.asset_card_id ?? null,
@@ -75,7 +74,6 @@ function normalizeAssetImageUrl(value) {
 
 function mapAssetTypeFieldsToSchemaRows(rows) {
   return rows
-    .filter((row) => row.active !== false)
     .map((row) => ({
       key: (row.name ?? '').trim(),
       label: (row.label ?? '').trim() || (row.name ?? '').trim(),
@@ -90,7 +88,7 @@ async function resolveAssetCardSchemaRows(organizationId, assetCardId) {
   const card = await db('asset_cards').where({ id: assetCardId, organization_id: organizationId }).first(['id']);
   if (!card) return { notFound: true };
 
-  const fieldRows = await listAssetCardFieldsByAssetCard(organizationId, assetCardId, { active: true });
+  const fieldRows = await listAssetCardFieldsByAssetCard(organizationId, assetCardId);
   return { notFound: false, schemaRows: mapAssetTypeFieldsToSchemaRows(fieldRows) };
 }
 
@@ -189,10 +187,8 @@ router.get('/organizations/:id/assets', (req, res) => {
   const parentAssetIdRaw = typeof req.query.parentAssetId === 'string' ? req.query.parentAssetId : undefined;
   const assetCardId = typeof req.query.assetCardId === 'string' ? req.query.assetCardId : undefined;
   const assetTypeId = typeof req.query.assetTypeId === 'string' ? req.query.assetTypeId : undefined;
-  const activeRaw = typeof req.query.active === 'string' ? req.query.active : undefined;
 
   const parentAssetId = parentAssetIdRaw === undefined ? undefined : parentAssetIdRaw === 'null' ? null : Number(parentAssetIdRaw);
-  const active = activeRaw === undefined ? undefined : activeRaw.toLowerCase() === 'true';
   const resolvedAssetCardId = assetCardId ?? assetTypeId;
   const pagination = parsePaginationQuery(req.query, { defaultPageSize: 12, maxPageSize: 100 });
   const q = typeof req.query.q === 'string' ? req.query.q : undefined;
@@ -208,7 +204,6 @@ router.get('/organizations/:id/assets', (req, res) => {
         locationId,
         parentAssetId,
         assetCardId: resolvedAssetCardId,
-        active,
         q,
         name,
         code,
@@ -248,7 +243,6 @@ const createSchema = z.object({
   code: z.string().min(1).max(64).optional().nullable(),
   name: z.string().min(1).max(255),
   image_url: z.string().max(4_000_000).optional().nullable(),
-  active: z.boolean().optional(),
   attributes_json: z.unknown().optional().nullable()
 });
 
@@ -292,7 +286,6 @@ router.post('/organizations/:id/assets', (req, res) => {
           code: parsed.data.code ?? null,
           name: parsed.data.name,
           imageUrl,
-          active: parsed.data.active,
           attributesJson
         });
 
@@ -340,7 +333,6 @@ const updateSchema = z.object({
   code: z.string().min(1).max(64).optional().nullable(),
   name: z.string().min(1).max(255),
   image_url: z.string().max(4_000_000).optional().nullable(),
-  active: z.boolean().optional(),
   attributes_json: z.unknown().optional().nullable()
 });
 
@@ -391,7 +383,6 @@ router.put('/organizations/:id/assets/:assetId', (req, res) => {
           code: parsed.data.code ?? null,
           name: parsed.data.name,
           imageUrl,
-          active: parsed.data.active,
           attributesJson
         });
         if (!updated) return null;
@@ -666,14 +657,20 @@ router.post('/organizations/:id/assets/:assetId/bom', (req, res) => {
       if (!asset) return { notFound: true };
 
       const inventoryItemCard = await db('inventory_item_cards as iic')
-        .leftJoin({ wt: 'warehouse_types' }, function joinWarehouseType() {
-          this.on('wt.id', '=', 'iic.warehouse_type_id').andOn('wt.organization_id', '=', 'iic.organization_id');
-        })
         .where({ 'iic.id': parsed.data.inventory_item_card_id, 'iic.organization_id': organizationId })
-        .first(['iic.id', 'iic.amount_unit_id', 'iic.active', 'wt.code as warehouse_type_code']);
+        .first(['iic.id', 'iic.amount_unit_id']);
       if (!inventoryItemCard) return { notFoundItem: true };
-      if (!inventoryItemCard.active) return { notFoundItem: true };
-      if (String(inventoryItemCard.warehouse_type_code ?? '').toUpperCase() !== 'SPARE_PART') return { invalidItemType: true };
+      const sparePartItem = await db('inventory_items as ii')
+        .leftJoin({ wt: 'warehouse_types' }, function joinWarehouseType() {
+          this.on('wt.id', '=', 'ii.warehouse_type_id').andOn('wt.organization_id', '=', 'ii.organization_id');
+        })
+        .where({
+          'ii.organization_id': organizationId,
+          'ii.inventory_item_card_id': inventoryItemCard.id
+        })
+        .whereRaw('upper(wt.code) = ?', ['SPARE_PART'])
+        .first(['ii.id']);
+      if (!sparePartItem) return { invalidItemType: true };
 
       const conflict = await db('asset_bom_lines')
         .where({ organization_id: organizationId, asset_id: assetId, inventory_item_card_id: parsed.data.inventory_item_card_id })

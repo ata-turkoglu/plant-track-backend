@@ -3,7 +3,7 @@ import { buildPaginationMeta } from '../utils/pagination.js';
 
 export async function listFirmsByOrganization(
   organizationId,
-  { q, name, email, phone, active, sortField, sortOrder, page, pageSize } = {}
+  { q, name, email, phone, sortField, sortOrder, page, pageSize } = {}
 ) {
   const query = db('firms')
     .where({ organization_id: organizationId })
@@ -18,12 +18,9 @@ export async function listFirmsByOrganization(
       'tax_no',
       'contact_name',
       'notes',
-      'active',
       'created_at',
       'updated_at'
     ]);
-
-  if (typeof active === 'boolean') query.andWhere({ active });
 
   const globalText = normalizeSearchText(q);
   if (globalText) {
@@ -60,8 +57,7 @@ function resolveFirmOrder(sortField, sortOrder) {
   const columnMap = {
     name: 'name',
     email: 'email',
-    phone: 'phone',
-    active: 'active'
+    phone: 'phone'
   };
   const column = columnMap[sortField] ?? 'name';
 
@@ -84,13 +80,12 @@ export async function getFirmById(id) {
       'tax_no',
       'contact_name',
       'notes',
-      'active',
       'created_at',
       'updated_at'
     ]);
 }
 
-export async function createFirm(trx, { organizationId, name, email, phone, address, taxNo, contactName, notes, active }) {
+export async function createFirm(trx, { organizationId, name, email, phone, address, taxNo, contactName, notes }) {
   const rows = await trx('firms')
     .insert({
       organization_id: organizationId,
@@ -100,8 +95,7 @@ export async function createFirm(trx, { organizationId, name, email, phone, addr
       address: address ?? null,
       tax_no: taxNo ?? null,
       contact_name: contactName ?? null,
-      notes: notes ?? null,
-      active: active ?? true
+      notes: notes ?? null
     })
     .returning([
       'id',
@@ -113,7 +107,6 @@ export async function createFirm(trx, { organizationId, name, email, phone, addr
       'tax_no',
       'contact_name',
       'notes',
-      'active',
       'created_at',
       'updated_at'
     ]);
@@ -121,7 +114,7 @@ export async function createFirm(trx, { organizationId, name, email, phone, addr
   return rows[0];
 }
 
-export async function updateFirm(trx, { organizationId, firmId, name, email, phone, address, taxNo, contactName, notes, active }) {
+export async function updateFirm(trx, { organizationId, firmId, name, email, phone, address, taxNo, contactName, notes }) {
   const rows = await trx('firms')
     .where({ id: firmId, organization_id: organizationId })
     .update({
@@ -132,7 +125,6 @@ export async function updateFirm(trx, { organizationId, firmId, name, email, pho
       tax_no: taxNo ?? null,
       contact_name: contactName ?? null,
       notes: notes ?? null,
-      active: active ?? true,
       updated_at: trx.fn.now()
     })
     .returning([
@@ -145,7 +137,6 @@ export async function updateFirm(trx, { organizationId, firmId, name, email, pho
       'tax_no',
       'contact_name',
       'notes',
-      'active',
       'created_at',
       'updated_at'
     ]);

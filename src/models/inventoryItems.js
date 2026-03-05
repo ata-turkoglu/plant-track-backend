@@ -17,8 +17,7 @@ function inventoryItemSelectColumns(dbOrTrx) {
     dbOrTrx.raw('iic.code as inventory_item_card_code'),
     dbOrTrx.raw('iic.name as inventory_item_card_name'),
     dbOrTrx.raw('iic.type_name as type_name'),
-    dbOrTrx.raw('iic.specification as specification'),
-    'ii.active'
+    dbOrTrx.raw('iic.specification as specification')
   ];
 }
 
@@ -30,14 +29,12 @@ function inventoryItemQueryWithCards(dbOrTrx) {
 
 export async function listInventoryItemsByOrganization(
   organizationId,
-  { active, warehouseTypeId, warehouseTypeCode, q, code, name, description, brand, model, typeName, specification, sortField, sortOrder, page, pageSize } = {}
+  { warehouseTypeId, warehouseTypeCode, q, code, name, description, brand, model, typeName, specification, sortField, sortOrder, page, pageSize } = {}
 ) {
   const query = inventoryItemQueryWithCards(db)
     .where({ 'ii.organization_id': organizationId })
     .orderBy(resolveInventoryItemOrder(sortField, sortOrder))
     .select(inventoryItemSelectColumns(db));
-
-  if (typeof active === 'boolean') query.andWhere({ 'ii.active': active });
 
   const parsedWarehouseTypeId = Number(warehouseTypeId);
   if (Number.isFinite(parsedWarehouseTypeId) && parsedWarehouseTypeId > 0) {
@@ -108,13 +105,11 @@ function resolveInventoryItemOrder(sortField, sortOrder) {
     model: 'ii.model',
     type_name: 'iic.type_name',
     specification: 'iic.specification',
-    amount_unit_id: 'ii.amount_unit_id',
-    active: 'ii.active'
+    amount_unit_id: 'ii.amount_unit_id'
   };
   const column = columnMap[sortField] ?? 'ii.name';
 
   return [
-    { column: 'ii.active', order: 'desc' },
     { column, order: direction },
     { column: 'ii.id', order: 'asc' }
   ];
@@ -126,7 +121,7 @@ export async function getInventoryItemById(id) {
 
 export async function createInventoryItem(
   trx,
-  { organizationId, inventoryItemCardId, warehouseTypeId, code, name, description, brand, model, attributesJson, unitId, active }
+  { organizationId, inventoryItemCardId, warehouseTypeId, code, name, description, brand, model, attributesJson, unitId }
 ) {
   const rows = await trx('inventory_items')
     .insert({
@@ -139,8 +134,7 @@ export async function createInventoryItem(
       brand: brand ?? null,
       model: model ?? null,
       attributes_json: attributesJson ?? null,
-      amount_unit_id: unitId,
-      active: active ?? true
+      amount_unit_id: unitId
     })
     .returning(['id']);
 
@@ -151,7 +145,7 @@ export async function createInventoryItem(
 
 export async function updateInventoryItem(
   trx,
-  { organizationId, inventoryItemId, inventoryItemCardId, code, name, description, brand, model, attributesJson, unitId, active }
+  { organizationId, inventoryItemId, warehouseTypeId, inventoryItemCardId, code, name, description, brand, model, attributesJson, unitId }
 ) {
   const patch = {
     code,
@@ -161,9 +155,11 @@ export async function updateInventoryItem(
     model: model ?? null,
     attributes_json: attributesJson ?? null,
     amount_unit_id: unitId,
-    active,
     updated_at: trx.fn.now()
   };
+  if (warehouseTypeId != null) {
+    patch.warehouse_type_id = warehouseTypeId;
+  }
   if (inventoryItemCardId != null) {
     patch.inventory_item_card_id = inventoryItemCardId;
   }
@@ -178,14 +174,10 @@ export async function updateInventoryItem(
   return inventoryItemQueryWithCards(trx).where({ 'ii.id': updatedId }).first(inventoryItemSelectColumns(trx));
 }
 
-export async function setInventoryItemActive(trx, { organizationId, inventoryItemId, active }) {
+export async function deleteInventoryItem(trx, { organizationId, inventoryItemId }) {
   const rows = await trx('inventory_items')
     .where({ id: inventoryItemId, organization_id: organizationId })
-    .update({ active, updated_at: trx.fn.now() })
+    .del()
     .returning(['id']);
-
-  const updated = rows[0] ?? null;
-  if (!updated) return null;
-
-  return updated;
+  return rows[0] ?? null;
 }

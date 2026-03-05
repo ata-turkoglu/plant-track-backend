@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 
 import db from '../db/knex.js';
-import { listInventoryItemsByOrganization, createInventoryItem, updateInventoryItem, setInventoryItemActive } from '../models/inventoryItems.js';
+import { listInventoryItemsByOrganization, createInventoryItem, deleteInventoryItem, updateInventoryItem } from '../models/inventoryItems.js';
 import { getInventoryItemCardById } from '../models/inventoryItemCards.js';
 import { getUnitById } from '../models/units.js';
 import { getWarehouseTypeById } from '../models/warehouseTypes.js';
@@ -33,7 +33,6 @@ function normalizeInventoryItemAttributesBySchema(attributesJson, schemaRows) {
   const normalized = {};
 
   for (const rawField of schemaRows) {
-    if (rawField?.active === false) continue;
     const key = typeof rawField?.name === 'string' ? rawField.name.trim() : '';
     if (!key) continue;
 
@@ -86,11 +85,6 @@ function normalizeInventoryItemAttributesBySchema(attributesJson, schemaRows) {
 
 router.get('/organizations/:id/inventory-items', (req, res) => {
   const organizationId = req.organizationId;
-  const activeText = typeof req.query.active === 'string' ? req.query.active.trim().toLowerCase() : '';
-  if (activeText && activeText !== 'true' && activeText !== 'false') {
-    return res.status(400).json({ message: 'Invalid active filter. Use true or false.' });
-  }
-  const active = activeText ? activeText === 'true' : undefined;
 
   const warehouseTypeIdText = typeof req.query.warehouseTypeId === 'string' ? req.query.warehouseTypeId.trim() : '';
   const warehouseTypeId = warehouseTypeIdText ? Number(warehouseTypeIdText) : undefined;
@@ -114,7 +108,6 @@ router.get('/organizations/:id/inventory-items', (req, res) => {
   return Promise.resolve()
     .then(() =>
       listInventoryItemsByOrganization(organizationId, {
-        active,
         warehouseTypeId,
         warehouseTypeCode,
         q,
@@ -149,8 +142,7 @@ const createSchema = z.object({
   attributes_json: z.unknown().optional().nullable(),
   specification: z.string().max(255).optional().nullable(),
   type_name: z.string().max(255).optional().nullable(),
-  amount_unit_id: z.number().int().positive().optional(),
-  active: z.boolean().optional()
+  amount_unit_id: z.number().int().positive().optional()
 });
 
 router.post('/organizations/:id/inventory-items', (req, res) => {
@@ -185,8 +177,6 @@ router.post('/organizations/:id/inventory-items', (req, res) => {
         const card = await getInventoryItemCardById(requestedCardId);
         if (!card) return { badInventoryCard: true };
         if (card.organization_id !== organizationId) return { badInventoryCard: true };
-        if (!card.active) return { badInventoryCard: true };
-        if (card.warehouse_type_id !== wt.id) return { badInventoryCard: true };
 
         const unit = await getUnitById(card.amount_unit_id);
         if (!unit || unit.organization_id !== organizationId) return { badUnit: true };
@@ -204,8 +194,7 @@ router.post('/organizations/:id/inventory-items', (req, res) => {
             brand: parsed.data.brand?.trim() || null,
             model: parsed.data.model?.trim() || null,
             attributesJson: normalizedAttr.value,
-            unitId: unit.id,
-            active: parsed.data.active
+            unitId: unit.id
           })
         );
 
@@ -222,13 +211,11 @@ router.post('/organizations/:id/inventory-items', (req, res) => {
         const cardRows = await trx('inventory_item_cards')
           .insert({
             organization_id: organizationId,
-            warehouse_type_id: wt.id,
             amount_unit_id: unit.id,
             code: parsed.data.code,
             name: parsed.data.name,
             type_name: parsed.data.type_name?.trim() || null,
-            specification: parsed.data.specification?.trim() || null,
-            active: parsed.data.active ?? true
+            specification: parsed.data.specification?.trim() || null
           })
           .returning(['id']);
 
@@ -245,8 +232,7 @@ router.post('/organizations/:id/inventory-items', (req, res) => {
           brand: parsed.data.brand?.trim() || null,
           model: parsed.data.model?.trim() || null,
           attributesJson: null,
-          unitId: unit.id,
-          active: parsed.data.active
+          unitId: unit.id
         });
       });
 
@@ -265,6 +251,7 @@ router.post('/organizations/:id/inventory-items', (req, res) => {
 });
 
 const updateSchema = z.object({
+  warehouse_type_id: z.number().int().positive().optional(),
   code: z.string().min(1).max(64),
   name: z.string().min(1).max(255),
   description: z.string().max(10_000).optional().nullable(),
@@ -274,8 +261,7 @@ const updateSchema = z.object({
   specification: z.string().max(255).optional().nullable(),
   type_name: z.string().max(255).optional().nullable(),
   amount_unit_id: z.number().int().positive().optional(),
-  inventory_item_card_id: z.number().int().positive().optional().nullable(),
-  active: z.boolean().optional()
+  inventory_item_card_id: z.number().int().positive().optional().nullable()
 });
 
 router.put('/organizations/:id/inventory-items/:inventoryItemId', (req, res) => {
@@ -304,7 +290,8 @@ router.put('/organizations/:id/inventory-items/:inventoryItemId', (req, res) => 
         .first(['id']);
       if (conflict) return { conflict: true };
 
-      const wt = await getWarehouseTypeById(existingItem.warehouse_type_id);
+      const nextWarehouseTypeId = parsed.data.warehouse_type_id ?? existingItem.warehouse_type_id;
+      const wt = await getWarehouseTypeById(nextWarehouseTypeId);
       if (!wt || wt.organization_id !== organizationId) return { badWarehouseType: true };
       const wtCode = String(wt.code ?? '').toUpperCase();
       const isCardScopedType = WAREHOUSE_TYPES_REQUIRING_INVENTORY_ITEM_CARD.has(wtCode);
@@ -315,8 +302,6 @@ router.put('/organizations/:id/inventory-items/:inventoryItemId', (req, res) => 
       const card = await getInventoryItemCardById(nextInventoryCardId);
       if (!card) return { badInventoryCard: true };
       if (card.organization_id !== organizationId) return { badInventoryCard: true };
-      if (isCardChange && !card.active) return { badInventoryCard: true };
-      if (card.warehouse_type_id !== existingItem.warehouse_type_id) return { badInventoryCard: true };
 
       const requestedUnitId = parsed.data.amount_unit_id;
       const resolvedUnitId = isCardScopedType || isCardChange ? card.amount_unit_id : requestedUnitId;
@@ -343,7 +328,6 @@ router.put('/organizations/:id/inventory-items/:inventoryItemId', (req, res) => 
                 amount_unit_id: unit.id,
                 type_name: parsed.data.type_name?.trim() || null,
                 specification: parsed.data.specification?.trim() || null,
-                active: parsed.data.active ?? true,
                 updated_at: trx.fn.now()
               });
           }
@@ -352,6 +336,7 @@ router.put('/organizations/:id/inventory-items/:inventoryItemId', (req, res) => 
         return updateInventoryItem(trx, {
           organizationId,
           inventoryItemId,
+          warehouseTypeId: wt.id,
           inventoryItemCardId: isCardChange ? nextInventoryCardId : null,
           code: parsed.data.code,
           name: parsed.data.name,
@@ -359,8 +344,7 @@ router.put('/organizations/:id/inventory-items/:inventoryItemId', (req, res) => 
           brand: parsed.data.brand?.trim() || null,
           model: parsed.data.model?.trim() || null,
           attributesJson: normalizedAttr.value,
-          unitId: unit.id,
-          active: parsed.data.active ?? true
+          unitId: unit.id
         });
       });
 
@@ -389,18 +373,20 @@ router.delete('/organizations/:id/inventory-items/:inventoryItemId', (req, res) 
       const existingItem = await db('inventory_items').where({ id: inventoryItemId, organization_id: organizationId }).first(['id']);
       if (!existingItem) return { notFoundInventoryItem: true };
 
-      // Soft delete (active=false) to preserve movement history.
-      const deactivated = await db.transaction(async (trx) =>
-        setInventoryItemActive(trx, { organizationId, inventoryItemId, active: false })
-      );
-      if (!deactivated) return { notFoundInventoryItem: true };
+      const deleted = await db.transaction((trx) => deleteInventoryItem(trx, { organizationId, inventoryItemId }));
+      if (!deleted) return { notFoundInventoryItem: true };
       return { ok: true };
     })
     .then((result) => {
       if (result.notFoundInventoryItem) return res.status(404).json({ message: 'Inventory item not found' });
       return res.status(204).send();
     })
-    .catch(() => res.status(500).json({ message: 'Failed to delete inventory item' }));
+    .catch((error) => {
+      if (error?.code === '23503') {
+        return res.status(409).json({ message: 'Inventory item is used in inventory movements and cannot be deleted.' });
+      }
+      return res.status(500).json({ message: 'Failed to delete inventory item' });
+    });
 });
 
 export default router;

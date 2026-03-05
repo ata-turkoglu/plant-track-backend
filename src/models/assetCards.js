@@ -1,6 +1,6 @@
 import db from '../db/knex.js';
 
-const ASSET_CARD_COLUMNS = ['id', 'organization_id', 'code', 'name', 'description', 'active', 'created_at', 'updated_at'];
+const ASSET_CARD_COLUMNS = ['id', 'organization_id', 'code', 'name', 'description', 'created_at', 'updated_at'];
 const ASSET_CARD_FIELD_COLUMNS = [
   'id',
   'organization_id',
@@ -12,7 +12,6 @@ const ASSET_CARD_FIELD_COLUMNS = [
   'required',
   'unit_id',
   'sort_order',
-  'active',
   'created_at',
   'updated_at'
 ];
@@ -62,8 +61,7 @@ async function replaceAssetCardFields(trx, { organizationId, assetCardId, fields
         data_type: field.dataType,
         required: field.required,
         unit_id: field.unitId,
-        sort_order: Number.isFinite(field.sortOrder) ? field.sortOrder : index,
-        active: field.active ?? true
+        sort_order: Number.isFinite(field.sortOrder) ? field.sortOrder : index
       }))
     )
     .returning(ASSET_CARD_FIELD_COLUMNS);
@@ -74,13 +72,11 @@ async function replaceAssetCardFields(trx, { organizationId, assetCardId, fields
   });
 }
 
-export async function listAssetCardsByOrganization(organizationId, { active, q, code, name, hasSchema } = {}) {
+export async function listAssetCardsByOrganization(organizationId, { q, code, name, hasSchema } = {}) {
   const query = db('asset_cards')
     .where({ organization_id: organizationId })
     .select(ASSET_CARD_COLUMNS)
     .orderBy([{ column: 'name', order: 'asc' }, { column: 'id', order: 'asc' }]);
-
-  if (typeof active === 'boolean') query.andWhere({ active });
 
   const qText = typeof q === 'string' ? q.trim() : '';
   if (qText) {
@@ -116,14 +112,13 @@ export async function listAssetCardsByOrganization(organizationId, { active, q, 
   return attachFields(rows, fields);
 }
 
-export async function createAssetCard(trx, { organizationId, code, name, description, active, fields }) {
+export async function createAssetCard(trx, { organizationId, code, name, description, fields }) {
   const rows = await trx('asset_cards')
     .insert({
       organization_id: organizationId,
       code,
       name,
-      description: description ?? null,
-      active: active ?? true
+      description: description ?? null
     })
     .returning(ASSET_CARD_COLUMNS);
 
@@ -132,14 +127,13 @@ export async function createAssetCard(trx, { organizationId, code, name, descrip
   return { ...assetCard, fields: fieldRows };
 }
 
-export async function updateAssetCard(trx, { organizationId, assetCardId, code, name, description, active, fields }) {
+export async function updateAssetCard(trx, { organizationId, assetCardId, code, name, description, fields }) {
   const rows = await trx('asset_cards')
     .where({ id: assetCardId, organization_id: organizationId })
     .update({
       code,
       name,
       description: description ?? null,
-      active: active ?? true,
       updated_at: trx.fn.now()
     })
     .returning(ASSET_CARD_COLUMNS);
@@ -156,13 +150,9 @@ export async function deleteAssetCard(trx, { organizationId, assetCardId }) {
   return rows[0] ?? null;
 }
 
-export async function listAssetCardFieldsByAssetCard(organizationId, assetCardId, { active } = {}) {
-  const query = db('asset_card_fields')
+export async function listAssetCardFieldsByAssetCard(organizationId, assetCardId) {
+  return db('asset_card_fields')
     .where({ organization_id: organizationId, asset_card_id: assetCardId })
     .select(ASSET_CARD_FIELD_COLUMNS)
     .orderBy([{ column: 'sort_order', order: 'asc' }, { column: 'id', order: 'asc' }]);
-
-  if (typeof active === 'boolean') query.andWhere({ active });
-
-  return query;
 }
