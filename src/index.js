@@ -18,6 +18,7 @@ import firmsRoutes from './routes/firms.js';
 import translationsRoutes from './routes/translations.js';
 import assetsRoutes from './routes/assets.js';
 import assetCardsRoutes from './routes/assetCards.js';
+import maintenanceWorkOrdersRoutes from './routes/maintenanceWorkOrders.js';
 
 const app = express();
 const port = Number(process.env.PORT ?? 3001);
@@ -50,6 +51,7 @@ app.use('/api', firmsRoutes);
 app.use('/api', translationsRoutes);
 app.use('/api', assetsRoutes);
 app.use('/api', assetCardsRoutes);
+app.use('/api', maintenanceWorkOrdersRoutes);
 
 app.use((_req, res) => {
   res.status(404).json({ message: 'Not found' });
