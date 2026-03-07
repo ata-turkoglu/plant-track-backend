@@ -31,6 +31,7 @@ router.get('/organizations/:id/maintenance-work-orders', (req, res) => {
   const assetId = typeof req.query.assetId === 'string' ? req.query.assetId : undefined;
   const locationId = typeof req.query.locationId === 'string' ? req.query.locationId : undefined;
   const assignedFirmId = typeof req.query.assignedFirmId === 'string' ? req.query.assignedFirmId : undefined;
+  const assignedEmployeeId = typeof req.query.assignedEmployeeId === 'string' ? req.query.assignedEmployeeId : undefined;
   const title = typeof req.query.title === 'string' ? req.query.title : undefined;
   const assetName = typeof req.query.assetName === 'string' ? req.query.assetName : undefined;
 
@@ -44,6 +45,7 @@ router.get('/organizations/:id/maintenance-work-orders', (req, res) => {
         assetId,
         locationId,
         assignedFirmId,
+        assignedEmployeeId,
         title,
         assetName,
         page: pagination.page,
@@ -135,8 +137,28 @@ const workOrderUpsertSchema = z.object({
   note: z.string().max(8000).optional().nullable(),
   planned_at: z.string().datetime().optional().nullable(),
   assigned_firm_id: z.number().int().positive().optional().nullable(),
+  assigned_employee_ids: z.array(z.number().int().positive()).optional(),
+  assigned_employee_id: z.number().int().positive().optional().nullable(),
   requested_state: z.enum(['MAINTENANCE', 'DOWN']).optional().nullable()
 });
+
+function normalizeAssignedEmployeeIds(payload) {
+  const raw = Array.isArray(payload.assigned_employee_ids)
+    ? payload.assigned_employee_ids
+    : payload.assigned_employee_id != null
+      ? [payload.assigned_employee_id]
+      : [];
+  return Array.from(new Set(raw.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0)));
+}
+
+async function validateAssignedEmployees(organizationId, assignedEmployeeIds) {
+  if (assignedEmployeeIds.length === 0) return true;
+  const employees = await db('employees')
+    .where({ organization_id: organizationId })
+    .whereIn('id', assignedEmployeeIds)
+    .select(['id']);
+  return employees.length === assignedEmployeeIds.length;
+}
 
 router.get('/organizations/:id/assets/:assetId/maintenance-work-orders', (req, res) => {
   const organizationId = req.organizationId;
@@ -201,6 +223,8 @@ router.post('/organizations/:id/assets/:assetId/maintenance-work-orders', (req, 
         const firm = await db('firms').where({ id: parsed.data.assigned_firm_id, organization_id: organizationId }).first(['id']);
         if (!firm) return { badFirm: true };
       }
+      const assignedEmployeeIds = normalizeAssignedEmployeeIds(parsed.data);
+      if (!(await validateAssignedEmployees(organizationId, assignedEmployeeIds))) return { badEmployee: true };
 
       const created = await db.transaction(async (trx) => {
         const asset = await trx('assets').where({ id: assetId, organization_id: organizationId }).first(['id']);
@@ -216,6 +240,7 @@ router.post('/organizations/:id/assets/:assetId/maintenance-work-orders', (req, 
           note: parsed.data.note?.trim() || null,
           plannedAt: parsed.data.planned_at ? new Date(parsed.data.planned_at) : null,
           assignedFirmId: parsed.data.assigned_firm_id ?? null,
+          assignedEmployeeIds,
           createdByUserId: null
         });
 
@@ -241,6 +266,7 @@ router.post('/organizations/:id/assets/:assetId/maintenance-work-orders', (req, 
     })
     .then((result) => {
       if (result.badFirm) return res.status(404).json({ message: 'Assigned firm not found' });
+      if (result.badEmployee) return res.status(404).json({ message: 'Assigned employee not found' });
       if (result.notFound) return res.status(404).json({ message: 'Asset not found' });
       if (result.invalidTime) return res.status(400).json({ message: 'Invalid asset state transition time' });
       return res.status(201).json({ workOrder: result.workOrder });
@@ -264,6 +290,8 @@ router.put('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrde
         const firm = await db('firms').where({ id: parsed.data.assigned_firm_id, organization_id: organizationId }).first(['id']);
         if (!firm) return { badFirm: true };
       }
+      const assignedEmployeeIds = normalizeAssignedEmployeeIds(parsed.data);
+      if (!(await validateAssignedEmployees(organizationId, assignedEmployeeIds))) return { badEmployee: true };
 
       const updated = await db.transaction(async (trx) => {
         const existing = await trx('maintenance_work_orders')
@@ -282,7 +310,8 @@ router.put('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrde
           symptom: parsed.data.symptom?.trim() || null,
           note: parsed.data.note?.trim() || null,
           plannedAt: parsed.data.planned_at ? new Date(parsed.data.planned_at) : null,
-          assignedFirmId: parsed.data.assigned_firm_id ?? null
+          assignedFirmId: parsed.data.assigned_firm_id ?? null,
+          assignedEmployeeIds
         });
 
         if (parsed.data.requested_state) {
@@ -305,6 +334,7 @@ router.put('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrde
     })
     .then((result) => {
       if (result.badFirm) return res.status(404).json({ message: 'Assigned firm not found' });
+      if (result.badEmployee) return res.status(404).json({ message: 'Assigned employee not found' });
       if (result.notFound) return res.status(404).json({ message: 'Maintenance work order not found' });
       if (result.invalidStatus) return res.status(409).json({ message: 'Completed or cancelled work orders cannot be updated' });
       if (result.invalidTime) return res.status(400).json({ message: 'Invalid asset state transition time' });
