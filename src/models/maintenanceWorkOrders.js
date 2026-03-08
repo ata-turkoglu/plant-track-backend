@@ -295,6 +295,7 @@ export async function createMaintenanceWorkOrder(
   }
 ) {
   const normalizedEmployeeIds = normalizeEmployeeIds(assignedEmployeeIds);
+  const normalizedOpenImagesJson = JSON.stringify(Array.isArray(openImagesJson) ? openImagesJson : []);
   const rows = await trx('maintenance_work_orders')
     .insert({
       organization_id: organizationId,
@@ -305,7 +306,7 @@ export async function createMaintenanceWorkOrder(
       title,
       symptom: symptom ?? null,
       note: note ?? null,
-      open_images_json: Array.isArray(openImagesJson) ? openImagesJson : [],
+      open_images_json: normalizedOpenImagesJson,
       planned_at: plannedAt ?? null,
       opened_at: trx.fn.now(),
       assigned_firm_id: assignedFirmId ?? null,
@@ -345,7 +346,7 @@ export async function updateMaintenanceWorkOrder(
     assigned_employee_ids: normalizedEmployeeIds,
     updated_at: trx.fn.now()
   };
-  if (openImagesJson !== undefined) patch.open_images_json = Array.isArray(openImagesJson) ? openImagesJson : [];
+  if (openImagesJson !== undefined) patch.open_images_json = JSON.stringify(Array.isArray(openImagesJson) ? openImagesJson : []);
 
   const rows = await trx('maintenance_work_orders')
     .where({
@@ -409,7 +410,7 @@ export async function completeMaintenanceWorkOrder(
   };
   if (invoiceNo !== undefined) patch.invoice_no = invoiceNo;
   if (invoiceAmount !== undefined) patch.invoice_amount = invoiceAmount;
-  if (closeImagesJson !== undefined) patch.close_images_json = Array.isArray(closeImagesJson) ? closeImagesJson : [];
+  if (closeImagesJson !== undefined) patch.close_images_json = JSON.stringify(Array.isArray(closeImagesJson) ? closeImagesJson : []);
 
   const rows = await trx('maintenance_work_orders')
     .where({
