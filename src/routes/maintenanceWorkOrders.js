@@ -16,6 +16,13 @@ import {
 } from '../models/maintenanceWorkOrders.js';
 import { createMovementEvent } from '../models/inventoryMovements.js';
 import { insertAssetEvent, lockAssetForUpdate, updateAssetState } from '../models/assets.js';
+import {
+  buildLocalBucketPublicUrl,
+  decodeBase64ImageDataUrl,
+  deleteLocalBucketObjectByPublicUrl,
+  parseLocalBucketObjectKeyFromPublicUrl,
+  storeDataImageUrlInLocalBucket
+} from '../services/localBucket.js';
 import { parsePaginationQuery } from '../utils/pagination.js';
 
 const router = Router();
@@ -129,30 +136,98 @@ async function transitionAssetState(trx, { organizationId, assetId, toState, occ
   return { ok: true, asset: updated };
 }
 
+const MAINTENANCE_IMAGE_MAX_COUNT = 8;
+const MAINTENANCE_IMAGE_MAX_BYTES = 4_000_000;
+const maintenanceImagesSchema = z.array(z.string().max(MAINTENANCE_IMAGE_MAX_BYTES)).max(MAINTENANCE_IMAGE_MAX_COUNT);
+
+function normalizeMaintenanceImageUrl(value) {
+  if (typeof value !== 'string') return undefined;
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const localBucketObjectKey = parseLocalBucketObjectKeyFromPublicUrl(trimmed);
+  if (localBucketObjectKey) return buildLocalBucketPublicUrl(localBucketObjectKey);
+
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith('data:image/')) return trimmed;
+  if (lower.startsWith('http://') || lower.startsWith('https://')) return trimmed;
+
+  return undefined;
+}
+
+function normalizeMaintenanceImageList(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter((item) => Boolean(item));
+}
+
+async function resolveMaintenanceImageUrls({ organizationId, imageUrls, scope, entityId }) {
+  const normalizedUrls = normalizeMaintenanceImageList(imageUrls);
+  const dedupe = new Set();
+  const resolvedUrls = [];
+
+  for (const rawUrl of normalizedUrls) {
+    const normalizedUrl = normalizeMaintenanceImageUrl(rawUrl);
+    if (normalizedUrl === undefined) return { invalidImage: true };
+    if (!normalizedUrl) continue;
+
+    let finalUrl = normalizedUrl;
+    if (normalizedUrl.toLowerCase().startsWith('data:image/')) {
+      if (!decodeBase64ImageDataUrl(normalizedUrl)) return { invalidImage: true };
+
+      // NOTE(local-bucket): temporary local adapter; production will migrate to cloud bucket.
+      const stored = await storeDataImageUrlInLocalBucket({
+        organizationId,
+        scope,
+        entityId,
+        dataUrl: normalizedUrl
+      });
+      if (!stored?.publicUrl) return { invalidImage: true };
+      finalUrl = stored.publicUrl;
+    }
+
+    if (!dedupe.has(finalUrl)) {
+      dedupe.add(finalUrl);
+      resolvedUrls.push(finalUrl);
+    }
+  }
+
+  return { imageUrls: resolvedUrls };
+}
+
+function findRemovedLocalBucketUrls(previousUrls, nextUrls) {
+  const nextSet = new Set(normalizeMaintenanceImageList(nextUrls));
+  return normalizeMaintenanceImageList(previousUrls).filter((url) => !nextSet.has(url) && parseLocalBucketObjectKeyFromPublicUrl(url));
+}
+
 const workOrderUpsertSchema = z.object({
   type: z.enum(['CORRECTIVE', 'PREVENTIVE']),
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']).optional().default('MEDIUM'),
   title: z.string().trim().min(1).max(255),
   symptom: z.string().max(8000).optional().nullable(),
   note: z.string().max(8000).optional().nullable(),
+  open_images: maintenanceImagesSchema.optional(),
   planned_at: z.string().datetime().optional().nullable(),
   assigned_firm_id: z.number().int().positive().optional().nullable(),
   assigned_employee_ids: z.array(z.number().int().positive()).optional(),
-  assigned_employee_id: z.number().int().positive().optional().nullable(),
   requested_state: z.enum(['MAINTENANCE', 'DOWN']).optional().nullable()
 });
 
-function normalizeAssignedEmployeeIds(payload) {
-  const raw = Array.isArray(payload.assigned_employee_ids)
-    ? payload.assigned_employee_ids
-    : payload.assigned_employee_id != null
-      ? [payload.assigned_employee_id]
-      : [];
-  return Array.from(new Set(raw.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0)));
+function normalizeAssignedEmployeeIds(values) {
+  if (!Array.isArray(values)) return [];
+  const unique = new Set();
+  for (const value of values) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) continue;
+    unique.add(Math.trunc(numeric));
+  }
+  return Array.from(unique);
 }
 
 async function validateAssignedEmployees(organizationId, assignedEmployeeIds) {
-  if (assignedEmployeeIds.length === 0) return true;
+  if (!assignedEmployeeIds.length) return true;
   const employees = await db('employees')
     .where({ organization_id: organizationId })
     .whereIn('id', assignedEmployeeIds)
@@ -223,8 +298,15 @@ router.post('/organizations/:id/assets/:assetId/maintenance-work-orders', (req, 
         const firm = await db('firms').where({ id: parsed.data.assigned_firm_id, organization_id: organizationId }).first(['id']);
         if (!firm) return { badFirm: true };
       }
-      const assignedEmployeeIds = normalizeAssignedEmployeeIds(parsed.data);
+      const assignedEmployeeIds = normalizeAssignedEmployeeIds(parsed.data.assigned_employee_ids);
       if (!(await validateAssignedEmployees(organizationId, assignedEmployeeIds))) return { badEmployee: true };
+      const openImagesResult = await resolveMaintenanceImageUrls({
+        organizationId,
+        imageUrls: parsed.data.open_images ?? [],
+        scope: 'maintenance-work-orders/open',
+        entityId: `asset-${assetId}`
+      });
+      if (openImagesResult.invalidImage) return { invalidImage: true };
 
       const created = await db.transaction(async (trx) => {
         const asset = await trx('assets').where({ id: assetId, organization_id: organizationId }).first(['id']);
@@ -238,6 +320,7 @@ router.post('/organizations/:id/assets/:assetId/maintenance-work-orders', (req, 
           title: parsed.data.title.trim(),
           symptom: parsed.data.symptom?.trim() || null,
           note: parsed.data.note?.trim() || null,
+          openImagesJson: openImagesResult.imageUrls,
           plannedAt: parsed.data.planned_at ? new Date(parsed.data.planned_at) : null,
           assignedFirmId: parsed.data.assigned_firm_id ?? null,
           assignedEmployeeIds,
@@ -265,6 +348,7 @@ router.post('/organizations/:id/assets/:assetId/maintenance-work-orders', (req, 
       return { workOrder };
     })
     .then((result) => {
+      if (result.invalidImage) return res.status(400).json({ message: 'Invalid open_images. Use /api/public/files URL, http(s) URL, or data:image payload.' });
       if (result.badFirm) return res.status(404).json({ message: 'Assigned firm not found' });
       if (result.badEmployee) return res.status(404).json({ message: 'Assigned employee not found' });
       if (result.notFound) return res.status(404).json({ message: 'Asset not found' });
@@ -290,14 +374,24 @@ router.put('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrde
         const firm = await db('firms').where({ id: parsed.data.assigned_firm_id, organization_id: organizationId }).first(['id']);
         if (!firm) return { badFirm: true };
       }
-      const assignedEmployeeIds = normalizeAssignedEmployeeIds(parsed.data);
+      const assignedEmployeeIds = normalizeAssignedEmployeeIds(parsed.data.assigned_employee_ids);
       if (!(await validateAssignedEmployees(organizationId, assignedEmployeeIds))) return { badEmployee: true };
+      const openImagesResult =
+        parsed.data.open_images !== undefined
+          ? await resolveMaintenanceImageUrls({
+              organizationId,
+              imageUrls: parsed.data.open_images,
+              scope: 'maintenance-work-orders/open',
+              entityId: String(workOrderId)
+            })
+          : null;
+      if (openImagesResult?.invalidImage) return { invalidImage: true };
 
       const updated = await db.transaction(async (trx) => {
         const existing = await trx('maintenance_work_orders')
           .where({ id: workOrderId, organization_id: organizationId, asset_id: assetId })
           .forUpdate()
-          .first(['id', 'status']);
+          .first(['id', 'status', 'open_images_json']);
         if (!existing) return { notFound: true };
         if (existing.status === 'DONE' || existing.status === 'CANCELLED') return { invalidStatus: true };
 
@@ -309,6 +403,7 @@ router.put('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrde
           title: parsed.data.title.trim(),
           symptom: parsed.data.symptom?.trim() || null,
           note: parsed.data.note?.trim() || null,
+          openImagesJson: openImagesResult?.imageUrls,
           plannedAt: parsed.data.planned_at ? new Date(parsed.data.planned_at) : null,
           assignedFirmId: parsed.data.assigned_firm_id ?? null,
           assignedEmployeeIds
@@ -325,14 +420,26 @@ router.put('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrde
           if (stateResult.invalidTime) return { invalidTime: true };
         }
 
-        return workOrder;
+        return {
+          workOrder,
+          previousOpenImages: normalizeMaintenanceImageList(existing.open_images_json)
+        };
       });
 
       if (updated?.notFound || updated?.invalidStatus || updated?.invalidTime) return updated;
-      const workOrder = await getMaintenanceWorkOrderById(organizationId, updated.id);
+      if (!updated?.workOrder?.id) return { notFound: true };
+      const workOrder = await getMaintenanceWorkOrderById(organizationId, updated.workOrder.id);
+      if (!workOrder) return { notFound: true };
+
+      const removedOpenImages = findRemovedLocalBucketUrls(updated.previousOpenImages, workOrder.open_images);
+      for (const imageUrl of removedOpenImages) {
+        await deleteLocalBucketObjectByPublicUrl(imageUrl).catch(() => {});
+      }
+
       return { workOrder };
     })
     .then((result) => {
+      if (result.invalidImage) return res.status(400).json({ message: 'Invalid open_images. Use /api/public/files URL, http(s) URL, or data:image payload.' });
       if (result.badFirm) return res.status(404).json({ message: 'Assigned firm not found' });
       if (result.badEmployee) return res.status(404).json({ message: 'Assigned employee not found' });
       if (result.notFound) return res.status(404).json({ message: 'Maintenance work order not found' });
@@ -411,6 +518,7 @@ const completePartSchema = z.object({
 const completeSchema = z.object({
   root_cause: z.string().max(8000).optional().nullable(),
   resolution_note: z.string().max(8000).optional().nullable(),
+  close_images: maintenanceImagesSchema.optional(),
   invoice_no: z.string().max(128).optional().nullable(),
   invoice_amount: z.number().nonnegative().optional().nullable(),
   completed_at: z.string().datetime().optional().nullable(),
@@ -431,24 +539,24 @@ router.post('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrd
   return Promise.resolve()
     .then(async () => {
       const completedAt = parsed.data.completed_at ? new Date(parsed.data.completed_at) : new Date();
+      const closeImagesResult =
+        parsed.data.close_images !== undefined
+          ? await resolveMaintenanceImageUrls({
+              organizationId,
+              imageUrls: parsed.data.close_images,
+              scope: 'maintenance-work-orders/close',
+              entityId: String(workOrderId)
+            })
+          : null;
+      if (closeImagesResult?.invalidImage) return { invalidImage: true };
 
       const updated = await db.transaction(async (trx) => {
         const existing = await trx('maintenance_work_orders')
           .where({ id: workOrderId, organization_id: organizationId, asset_id: assetId })
           .forUpdate()
-          .first(['id', 'status']);
+          .first(['id', 'status', 'close_images_json']);
         if (!existing) return { notFound: true };
         if (existing.status === 'DONE' || existing.status === 'CANCELLED') return { invalidStatus: true };
-
-        const assetNode = await trx('nodes')
-          .where({
-            organization_id: organizationId,
-            node_type: 'ASSET',
-            ref_table: 'assets',
-            ref_id: String(assetId)
-          })
-          .first(['id']);
-        if (!assetNode) return { missingAssetNode: true };
 
         const parts = parsed.data.parts ?? [];
         const validatedParts = [];
@@ -494,6 +602,21 @@ router.post('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrd
 
         let movementEventId = null;
         if (validatedParts.length > 0) {
+          const assetSnapshot = await trx('assets')
+            .where({ id: assetId, organization_id: organizationId })
+            .first(['id', 'location_id']);
+          if (!assetSnapshot?.location_id) return { missingAssetLocationNode: true };
+
+          const locationNode = await trx('nodes')
+            .where({
+              organization_id: organizationId,
+              node_type: 'LOCATION',
+              ref_table: 'locations',
+              ref_id: String(assetSnapshot.location_id)
+            })
+            .first(['id']);
+          if (!locationNode) return { missingAssetLocationNode: true };
+
           const movement = await createMovementEvent(trx, {
             organizationId,
             eventType: 'TRANSFER',
@@ -507,7 +630,7 @@ router.post('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrd
               inventoryItemId: part.inventoryItemId,
               unitId: part.unitId,
               fromNodeId: part.sourceNodeId,
-              toNodeId: assetNode.id,
+              toNodeId: locationNode.id,
               quantity: part.quantity,
               unitPrice: null,
               currencyCode: null
@@ -528,6 +651,7 @@ router.post('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrd
           workOrderId,
           rootCause: parsed.data.root_cause?.trim() || null,
           resolutionNote: parsed.data.resolution_note?.trim() || null,
+          closeImagesJson: closeImagesResult?.imageUrls,
           invoiceNo: parsed.data.invoice_no === undefined ? undefined : parsed.data.invoice_no?.trim() || null,
           invoiceAmount: parsed.data.invoice_amount,
           completedAt,
@@ -545,13 +669,17 @@ router.post('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrd
         if (stateResult.invalidTime) return { invalidTime: true };
         if (stateResult.notFoundAsset) return { notFound: true };
 
-        return { workOrder, movementEventId };
+        return {
+          workOrder,
+          movementEventId,
+          previousCloseImages: normalizeMaintenanceImageList(existing.close_images_json)
+        };
       });
 
       if (
         updated?.notFound ||
         updated?.invalidStatus ||
-        updated?.missingAssetNode ||
+        updated?.missingAssetLocationNode ||
         updated?.badItem ||
         updated?.badItemType ||
         updated?.badSourceNode ||
@@ -560,17 +688,26 @@ router.post('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrd
       ) {
         return updated;
       }
+      if (!updated?.workOrder?.id) return { notFound: true };
 
       const [workOrder, parts] = await Promise.all([
         getMaintenanceWorkOrderById(organizationId, updated.workOrder.id),
         listMaintenanceWorkOrderParts(organizationId, workOrderId)
       ]);
+      if (!workOrder) return { notFound: true };
+
+      const removedCloseImages = findRemovedLocalBucketUrls(updated.previousCloseImages, workOrder.close_images);
+      for (const imageUrl of removedCloseImages) {
+        await deleteLocalBucketObjectByPublicUrl(imageUrl).catch(() => {});
+      }
+
       return { workOrder, parts };
     })
     .then((result) => {
+      if (result.invalidImage) return res.status(400).json({ message: 'Invalid close_images. Use /api/public/files URL, http(s) URL, or data:image payload.' });
       if (result.notFound) return res.status(404).json({ message: 'Maintenance work order not found' });
       if (result.invalidStatus) return res.status(409).json({ message: 'Completed or cancelled work orders cannot be updated' });
-      if (result.missingAssetNode) return res.status(409).json({ message: 'Asset node not found' });
+      if (result.missingAssetLocationNode) return res.status(409).json({ message: 'Asset location node not found' });
       if (result.badItem) return res.status(404).json({ message: 'Inventory item not found' });
       if (result.badItemType) return res.status(400).json({ message: 'Only spare part items can be consumed in maintenance' });
       if (result.badSourceNode) return res.status(404).json({ message: 'Source warehouse node not found' });

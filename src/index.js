@@ -20,9 +20,16 @@ import translationsRoutes from './routes/translations.js';
 import assetsRoutes from './routes/assets.js';
 import assetCardsRoutes from './routes/assetCards.js';
 import maintenanceWorkOrdersRoutes from './routes/maintenanceWorkOrders.js';
+import {
+  ensureLocalBucketRootDir,
+  getLocalBucketPublicBasePath,
+  getLocalBucketRootDir
+} from './services/localBucket.js';
 
 const app = express();
 const port = Number(process.env.PORT ?? 3001);
+
+await ensureLocalBucketRootDir();
 
 app.use(cors());
 app.use(morgan('dev'));
@@ -35,6 +42,10 @@ app.use((err, _req, res, next) => {
   }
   return next(err);
 });
+
+// NOTE(local-bucket): Static mount for project-folder bucket.
+// TODO(production): Replace with signed cloud object URLs and private bucket access.
+app.use(getLocalBucketPublicBasePath(), express.static(getLocalBucketRootDir()));
 
 app.use('/api', healthRoutes);
 app.use('/api', authRoutes);

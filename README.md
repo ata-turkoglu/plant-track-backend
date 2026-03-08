@@ -64,6 +64,9 @@ Contract docs:
 - `inventory movements`:
   - use event + lines model, node ids are required for movements.
   - keep `POSTED` immutability rule in mind for corrections.
+- `image uploads`:
+  - development uses a project-folder local bucket mounted at `/api/public/files`.
+  - this adapter is temporary; production target is cloud object storage (S3/GCS/Azure Blob).
 
 ## Pagination Rule (Required)
 

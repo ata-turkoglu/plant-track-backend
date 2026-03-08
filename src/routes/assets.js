@@ -17,6 +17,14 @@ import {
   updateAssetLocation,
   updateAssetState
 } from '../models/assets.js';
+import {
+  buildLocalBucketPublicUrl,
+  decodeBase64ImageDataUrl,
+  deleteLocalBucketObjectByPublicUrl,
+  isLocalBucketPublicUrl,
+  parseLocalBucketObjectKeyFromPublicUrl,
+  storeDataImageUrlInLocalBucket
+} from '../services/localBucket.js';
 import { parsePaginationQuery } from '../utils/pagination.js';
 import {
   createAssetBomLine,
@@ -64,6 +72,9 @@ function normalizeAssetImageUrl(value) {
 
   const trimmed = value.trim();
   if (!trimmed) return null;
+
+  const localBucketObjectKey = parseLocalBucketObjectKeyFromPublicUrl(trimmed);
+  if (localBucketObjectKey) return buildLocalBucketPublicUrl(localBucketObjectKey);
 
   const lower = trimmed.toLowerCase();
   if (lower.startsWith('data:image/')) return trimmed;
@@ -257,6 +268,8 @@ router.post('/organizations/:id/assets', (req, res) => {
       let attributesJson = parsed.data.attributes_json ?? null;
       const imageUrl = normalizeAssetImageUrl(parsed.data.image_url);
       if (imageUrl === undefined) return { invalidImage: true };
+      const shouldStoreImageInLocalBucket = typeof imageUrl === 'string' && imageUrl.toLowerCase().startsWith('data:image/');
+      if (shouldStoreImageInLocalBucket && !decodeBase64ImageDataUrl(imageUrl)) return { invalidImage: true };
 
       const location = await db('locations').where({ id: parsed.data.location_id, organization_id: organizationId }).first(['id']);
       if (!location) return { notFoundLocation: true };
@@ -285,9 +298,25 @@ router.post('/organizations/:id/assets', (req, res) => {
           assetCardId: resolvedAssetCardId,
           code: parsed.data.code ?? null,
           name: parsed.data.name,
-          imageUrl,
+          imageUrl: shouldStoreImageInLocalBucket ? null : imageUrl,
           attributesJson
         });
+
+        if (shouldStoreImageInLocalBucket) {
+          // NOTE(local-bucket): temporary local adapter; production will migrate to cloud bucket.
+          const stored = await storeDataImageUrlInLocalBucket({
+            organizationId,
+            scope: 'assets',
+            entityId: String(created.id),
+            dataUrl: imageUrl
+          });
+          if (!stored?.publicUrl) return { invalidImage: true };
+
+          await trx('assets')
+            .where({ id: created.id, organization_id: organizationId })
+            .update({ image_url: stored.publicUrl, updated_at: trx.fn.now() });
+          created.image_url = stored.publicUrl;
+        }
 
         await upsertRefNode(trx, {
           organizationId,
@@ -313,10 +342,11 @@ router.post('/organizations/:id/assets', (req, res) => {
         return created;
       });
 
+      if (asset?.invalidImage) return { invalidImage: true };
       return { asset };
     })
     .then((result) => {
-      if (result.invalidImage) return res.status(400).json({ message: 'Invalid image_url. Use http(s) URL or data:image payload.' });
+      if (result.invalidImage) return res.status(400).json({ message: 'Invalid image_url. Use /api/public/files URL, http(s) URL, or data:image payload.' });
       if (result.notFoundLocation) return res.status(404).json({ message: 'Location not found' });
       if (result.notFoundParent) return res.status(404).json({ message: 'Parent asset not found' });
       if (result.notFoundType) return res.status(404).json({ message: 'Asset card not found' });
@@ -355,7 +385,20 @@ router.put('/organizations/:id/assets/:assetId', (req, res) => {
 
       const imageUrlInput = normalizeAssetImageUrl(parsed.data.image_url);
       if (imageUrlInput === undefined) return { invalidImage: true };
-      const imageUrl = parsed.data.image_url === undefined ? (existing.image_url ?? null) : imageUrlInput;
+      const shouldStoreImageInLocalBucket = typeof imageUrlInput === 'string' && imageUrlInput.toLowerCase().startsWith('data:image/');
+      if (shouldStoreImageInLocalBucket && !decodeBase64ImageDataUrl(imageUrlInput)) return { invalidImage: true };
+
+      let imageUrl = parsed.data.image_url === undefined ? (existing.image_url ?? null) : imageUrlInput;
+      if (shouldStoreImageInLocalBucket) {
+        const stored = await storeDataImageUrlInLocalBucket({
+          organizationId,
+          scope: 'assets',
+          entityId: String(assetId),
+          dataUrl: imageUrlInput
+        });
+        if (!stored?.publicUrl) return { invalidImage: true };
+        imageUrl = stored.publicUrl;
+      }
 
       if (parsed.data.parent_asset_id) {
         if (parsed.data.parent_asset_id === assetId) return { selfParent: true };
@@ -401,16 +444,29 @@ router.put('/organizations/:id/assets/:assetId', (req, res) => {
         return updated;
       });
 
-      return { asset };
+      return {
+        asset,
+        previousImageUrl: existing.image_url ?? null,
+        nextImageUrl: imageUrl ?? null
+      };
     })
-    .then((result) => {
-      if (result.invalidImage) return res.status(400).json({ message: 'Invalid image_url. Use http(s) URL or data:image payload.' });
+    .then(async (result) => {
+      if (result.invalidImage) return res.status(400).json({ message: 'Invalid image_url. Use /api/public/files URL, http(s) URL, or data:image payload.' });
       if (result.notFound) return res.status(404).json({ message: 'Asset not found' });
       if (result.selfParent) return res.status(400).json({ message: 'Asset cannot be its own parent' });
       if (result.notFoundParent) return res.status(404).json({ message: 'Parent asset not found' });
       if (result.notFoundType) return res.status(404).json({ message: 'Asset card not found' });
       if (result.invalidAttributes) return res.status(400).json({ message: result.invalidAttributes });
       if (!result.asset) return res.status(404).json({ message: 'Asset not found' });
+
+      const shouldDeletePreviousImage =
+        result.previousImageUrl &&
+        result.previousImageUrl !== result.nextImageUrl &&
+        isLocalBucketPublicUrl(result.previousImageUrl);
+      if (shouldDeletePreviousImage) {
+        await deleteLocalBucketObjectByPublicUrl(result.previousImageUrl).catch(() => {});
+      }
+
       return res.status(200).json({ asset: result.asset });
     })
     .catch(() => res.status(500).json({ message: 'Failed to update asset' }));
@@ -423,7 +479,7 @@ router.delete('/organizations/:id/assets/:assetId', (req, res) => {
 
   return Promise.resolve()
     .then(async () => {
-      const existing = await db('assets').where({ id: assetId, organization_id: organizationId }).first(['id']);
+      const existing = await db('assets').where({ id: assetId, organization_id: organizationId }).first(['id', 'image_url']);
       if (!existing) return { notFound: true };
 
       const child = await db('assets').where({ organization_id: organizationId, parent_asset_id: assetId }).first(['id']);
@@ -445,12 +501,17 @@ router.delete('/organizations/:id/assets/:assetId', (req, res) => {
         }
       });
 
-      return { ok: true };
+      return { ok: true, previousImageUrl: existing.image_url ?? null };
     })
-    .then((result) => {
+    .then(async (result) => {
       if (result.notFound) return res.status(404).json({ message: 'Asset not found' });
       if (result.conflictChildren) return res.status(409).json({ message: 'Asset has child assets' });
       if (result.conflictMovements) return res.status(409).json({ message: 'Asset has inventory movement history' });
+
+      if (result.previousImageUrl && isLocalBucketPublicUrl(result.previousImageUrl)) {
+        await deleteLocalBucketObjectByPublicUrl(result.previousImageUrl).catch(() => {});
+      }
+
       return res.status(204).send();
     })
     .catch(() => res.status(500).json({ message: 'Failed to delete asset' }));

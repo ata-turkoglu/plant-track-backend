@@ -196,18 +196,10 @@ router.delete('/organizations/:id/employees/:employeeId', (req, res) => {
       if (!existing || existing.organization_id !== organizationId) return { notFoundEmployee: true };
 
       const usedInWorkOrder = await db('maintenance_work_orders')
-        .where({
-          organization_id: organizationId,
-          assigned_employee_id: employeeId
-        })
+        .where({ organization_id: organizationId })
+        .whereRaw("? = any(coalesce(assigned_employee_ids, '{}'::int[]))", [employeeId])
         .first(['id']);
-      const usedInWorkOrderLink = await db('maintenance_work_order_employees')
-        .where({
-          organization_id: organizationId,
-          employee_id: employeeId
-        })
-        .first(['id']);
-      if (usedInWorkOrder || usedInWorkOrderLink) return { employeeInUse: true };
+      if (usedInWorkOrder) return { employeeInUse: true };
 
       const deleted = await db.transaction((trx) => deleteEmployee(trx, { organizationId, employeeId }));
       if (!deleted) return { notFoundEmployee: true };

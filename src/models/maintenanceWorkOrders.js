@@ -18,9 +18,12 @@ const WORK_ORDER_COLUMNS = [
   'mwo.started_at',
   'mwo.completed_at',
   'mwo.assigned_firm_id',
-  'mwo.assigned_employee_id',
+  db.raw("coalesce(mwo.assigned_employee_ids, '{}'::int[]) as assigned_employee_ids"),
+  db.raw("(coalesce(mwo.assigned_employee_ids, '{}'::int[]))[1] as assigned_employee_id"),
   'mwo.invoice_no',
   'mwo.invoice_amount',
+  db.raw("coalesce(mwo.open_images_json, '[]'::jsonb) as open_images"),
+  db.raw("coalesce(mwo.close_images_json, '[]'::jsonb) as close_images"),
   'mwo.created_by_user_id',
   'mwo.closed_by_user_id',
   'mwo.created_at',
@@ -29,10 +32,26 @@ const WORK_ORDER_COLUMNS = [
   db.raw('a.name as asset_name'),
   db.raw('a.current_state as asset_current_state'),
   db.raw('f.name as assigned_firm_name'),
-  db.raw('e.name as assigned_employee_name'),
-  db.raw("coalesce(mae.assigned_employees, '[]'::json) as assigned_employees"),
-  db.raw("coalesce(mae.assigned_employee_ids, '{}'::int[]) as assigned_employee_ids"),
-  db.raw('mae.assigned_employee_names'),
+  db.raw(`(
+    select ae.name
+    from employees ae
+    where ae.organization_id = mwo.organization_id
+      and ae.id = any(coalesce(mwo.assigned_employee_ids, '{}'::int[]))
+    order by array_position(coalesce(mwo.assigned_employee_ids, '{}'::int[]), ae.id)
+    limit 1
+  ) as assigned_employee_name`),
+  db.raw(`(
+    select string_agg(ae.name, ', ' order by ae.name)
+    from employees ae
+    where ae.organization_id = mwo.organization_id
+      and ae.id = any(coalesce(mwo.assigned_employee_ids, '{}'::int[]))
+  ) as assigned_employee_names`),
+  db.raw(`coalesce((
+    select json_agg(json_build_object('id', ae.id, 'name', ae.name) order by ae.name)
+    from employees ae
+    where ae.organization_id = mwo.organization_id
+      and ae.id = any(coalesce(mwo.assigned_employee_ids, '{}'::int[]))
+  ), '[]'::json) as assigned_employees`),
   db.raw('(select count(*)::int from maintenance_work_order_parts mwop where mwop.work_order_id = mwo.id) as part_count'),
   db.raw(`(
     select string_agg(distinct ii.name, ', ' order by ii.name)
@@ -59,9 +78,11 @@ const WORK_ORDER_RETURNING_COLUMNS = [
   'started_at',
   'completed_at',
   'assigned_firm_id',
-  'assigned_employee_id',
+  'assigned_employee_ids',
   'invoice_no',
   'invoice_amount',
+  'open_images_json',
+  'close_images_json',
   'created_by_user_id',
   'closed_by_user_id',
   'created_at',
@@ -88,21 +109,6 @@ const PART_COLUMNS = [
   db.raw('n.name as source_node_name')
 ];
 
-function assignedEmployeesSubquery() {
-  return db('maintenance_work_order_employees as mwoe')
-    .join({ ae: 'employees' }, function joinAssignedEmployee() {
-      this.on('ae.id', '=', 'mwoe.employee_id').andOn('ae.organization_id', '=', 'mwoe.organization_id');
-    })
-    .select([
-      'mwoe.organization_id',
-      'mwoe.work_order_id',
-      db.raw("json_agg(json_build_object('id', ae.id, 'name', ae.name) order by ae.name) as assigned_employees"),
-      db.raw('array_agg(ae.id order by ae.name) as assigned_employee_ids'),
-      db.raw("string_agg(ae.name, ', ' order by ae.name) as assigned_employee_names")
-    ])
-    .groupBy(['mwoe.organization_id', 'mwoe.work_order_id']);
-}
-
 function baseWorkOrderQuery(organizationId) {
   return db('maintenance_work_orders as mwo')
     .leftJoin({ a: 'assets' }, function joinAsset() {
@@ -110,12 +116,6 @@ function baseWorkOrderQuery(organizationId) {
     })
     .leftJoin({ f: 'firms' }, function joinFirm() {
       this.on('f.id', '=', 'mwo.assigned_firm_id').andOn('f.organization_id', '=', 'mwo.organization_id');
-    })
-    .leftJoin({ e: 'employees' }, function joinEmployee() {
-      this.on('e.id', '=', 'mwo.assigned_employee_id').andOn('e.organization_id', '=', 'mwo.organization_id');
-    })
-    .leftJoin(assignedEmployeesSubquery().as('mae'), function joinAssignedEmployees() {
-      this.on('mae.work_order_id', '=', 'mwo.id').andOn('mae.organization_id', '=', 'mwo.organization_id');
     })
     .where('mwo.organization_id', organizationId);
 }
@@ -178,8 +178,14 @@ export async function listMaintenanceWorkOrdersByOrganization(
         .orWhereRaw('coalesce(a.name, \'\') ilike ?', [`%${globalText}%`])
         .orWhereRaw('coalesce(a.code, \'\') ilike ?', [`%${globalText}%`])
         .orWhereRaw('coalesce(f.name, \'\') ilike ?', [`%${globalText}%`])
-        .orWhereRaw('coalesce(e.name, \'\') ilike ?', [`%${globalText}%`])
-        .orWhereRaw('coalesce(mae.assigned_employee_names, \'\') ilike ?', [`%${globalText}%`])
+        .orWhereExists((existsBuilder) =>
+          existsBuilder
+            .select(db.raw('1'))
+            .from('employees as ae')
+            .whereRaw('ae.organization_id = mwo.organization_id')
+            .whereRaw("ae.name ilike ?", [`%${globalText}%`])
+            .whereRaw("ae.id = any(coalesce(mwo.assigned_employee_ids, '{}'::int[]))")
+        )
     );
   }
 
@@ -207,14 +213,7 @@ export async function listMaintenanceWorkOrdersByOrganization(
 
   const numericAssignedEmployeeId = Number(assignedEmployeeId);
   if (Number.isFinite(numericAssignedEmployeeId) && numericAssignedEmployeeId > 0) {
-    query.andWhereExists((builder) =>
-      builder
-        .select(db.raw('1'))
-        .from('maintenance_work_order_employees as mwoe')
-        .whereRaw('mwoe.work_order_id = mwo.id')
-        .andWhere('mwoe.organization_id', organizationId)
-        .andWhere('mwoe.employee_id', numericAssignedEmployeeId)
-    );
+    query.andWhereRaw("? = any(coalesce(mwo.assigned_employee_ids, '{}'::int[]))", [numericAssignedEmployeeId]);
   }
 
   const titleText = typeof title === 'string' ? title.trim() : '';
@@ -288,14 +287,14 @@ export async function createMaintenanceWorkOrder(
     title,
     symptom,
     note,
+    openImagesJson,
     plannedAt,
     assignedFirmId,
     assignedEmployeeIds,
-    assignedEmployeeId,
     createdByUserId
   }
 ) {
-  const normalizedEmployeeIds = normalizeEmployeeIds(assignedEmployeeIds, assignedEmployeeId);
+  const normalizedEmployeeIds = normalizeEmployeeIds(assignedEmployeeIds);
   const rows = await trx('maintenance_work_orders')
     .insert({
       organization_id: organizationId,
@@ -306,19 +305,14 @@ export async function createMaintenanceWorkOrder(
       title,
       symptom: symptom ?? null,
       note: note ?? null,
+      open_images_json: Array.isArray(openImagesJson) ? openImagesJson : [],
       planned_at: plannedAt ?? null,
       opened_at: trx.fn.now(),
       assigned_firm_id: assignedFirmId ?? null,
-      assigned_employee_id: normalizedEmployeeIds[0] ?? null,
+      assigned_employee_ids: normalizedEmployeeIds,
       created_by_user_id: createdByUserId ?? null
     })
     .returning(WORK_ORDER_RETURNING_COLUMNS);
-
-  await replaceMaintenanceWorkOrderEmployees(trx, {
-    organizationId,
-    workOrderId: rows[0].id,
-    employeeIds: normalizedEmployeeIds
-  });
 
   return rows[0];
 }
@@ -333,68 +327,39 @@ export async function updateMaintenanceWorkOrder(
     title,
     symptom,
     note,
+    openImagesJson,
     plannedAt,
     assignedFirmId,
-    assignedEmployeeIds,
-    assignedEmployeeId
+    assignedEmployeeIds
   }
 ) {
-  const normalizedEmployeeIds = normalizeEmployeeIds(assignedEmployeeIds, assignedEmployeeId);
+  const normalizedEmployeeIds = normalizeEmployeeIds(assignedEmployeeIds);
+  const patch = {
+    type,
+    priority,
+    title,
+    symptom: symptom ?? null,
+    note: note ?? null,
+    planned_at: plannedAt ?? null,
+    assigned_firm_id: assignedFirmId ?? null,
+    assigned_employee_ids: normalizedEmployeeIds,
+    updated_at: trx.fn.now()
+  };
+  if (openImagesJson !== undefined) patch.open_images_json = Array.isArray(openImagesJson) ? openImagesJson : [];
+
   const rows = await trx('maintenance_work_orders')
     .where({
       id: workOrderId,
       organization_id: organizationId
     })
-    .update({
-      type,
-      priority,
-      title,
-      symptom: symptom ?? null,
-      note: note ?? null,
-      planned_at: plannedAt ?? null,
-      assigned_firm_id: assignedFirmId ?? null,
-      assigned_employee_id: normalizedEmployeeIds[0] ?? null,
-      updated_at: trx.fn.now()
-    })
+    .update(patch)
     .returning(WORK_ORDER_RETURNING_COLUMNS);
-
-  if (rows[0]?.id) {
-    await replaceMaintenanceWorkOrderEmployees(trx, {
-      organizationId,
-      workOrderId,
-      employeeIds: normalizedEmployeeIds
-    });
-  }
 
   return rows[0] ?? null;
 }
 
-export async function replaceMaintenanceWorkOrderEmployees(trx, { organizationId, workOrderId, employeeIds }) {
-  const normalizedEmployeeIds = normalizeEmployeeIds(employeeIds);
-  await trx('maintenance_work_order_employees')
-    .where({
-      organization_id: organizationId,
-      work_order_id: workOrderId
-    })
-    .del();
-
-  if (!normalizedEmployeeIds.length) return [];
-
-  return trx('maintenance_work_order_employees').insert(
-    normalizedEmployeeIds.map((employeeId) => ({
-      organization_id: organizationId,
-      work_order_id: workOrderId,
-      employee_id: employeeId
-    }))
-  );
-}
-
-function normalizeEmployeeIds(employeeIds, fallbackEmployeeId) {
-  const raw = Array.isArray(employeeIds)
-    ? employeeIds
-    : fallbackEmployeeId != null
-      ? [fallbackEmployeeId]
-      : [];
+function normalizeEmployeeIds(employeeIds) {
+  const raw = Array.isArray(employeeIds) ? employeeIds : [];
   const unique = new Set();
   for (const value of raw) {
     const numeric = Number(value);
@@ -427,6 +392,7 @@ export async function completeMaintenanceWorkOrder(
     workOrderId,
     rootCause,
     resolutionNote,
+    closeImagesJson,
     invoiceNo,
     invoiceAmount,
     completedAt,
@@ -443,6 +409,7 @@ export async function completeMaintenanceWorkOrder(
   };
   if (invoiceNo !== undefined) patch.invoice_no = invoiceNo;
   if (invoiceAmount !== undefined) patch.invoice_amount = invoiceAmount;
+  if (closeImagesJson !== undefined) patch.close_images_json = Array.isArray(closeImagesJson) ? closeImagesJson : [];
 
   const rows = await trx('maintenance_work_orders')
     .where({
