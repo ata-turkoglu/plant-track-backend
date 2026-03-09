@@ -13,6 +13,8 @@ import { loadOrganizationContext } from '../middleware/organizationContext.js';
 const router = Router();
 router.use('/organizations/:id', loadOrganizationContext);
 
+const UNIT_DIMENSIONS = ['COUNT', 'MASS', 'VOLUME', 'LENGTH', 'AREA', 'TIME'];
+
 const baseSchema = {
   code: z
     .string()
@@ -20,6 +22,7 @@ const baseSchema = {
     .max(64)
     .optional()
     .nullable(),
+  dimension: z.enum(UNIT_DIMENSIONS).optional(),
   tr_name: z.string().trim().min(1).max(2000),
   en_name: z.string().trim().min(1).max(2000),
   tr_symbol: z.string().trim().max(2000).optional().nullable(),
@@ -49,6 +52,10 @@ function normalizeEnText(value) {
 
 function normalizeTranslationKey(value) {
   return value.trim().toLowerCase();
+}
+
+function normalizeDimension(value) {
+  return String(value ?? 'COUNT').trim().toUpperCase();
 }
 
 async function upsertUnitSymbolTranslations(trx, { organizationId, symbolKey, tr, en }) {
@@ -91,6 +98,8 @@ router.post('/organizations/:id/units', (req, res) => {
       if (!code) return { invalidCode: true };
       const enName = normalizeEnText(parsed.data.en_name);
       const trName = parsed.data.tr_name.trim();
+      const dimension = normalizeDimension(parsed.data.dimension);
+      if (!UNIT_DIMENSIONS.includes(dimension)) return { invalidDimension: true };
 
       const rawEnSymbol = parsed.data.en_symbol?.trim() || null;
       const rawTrSymbol = parsed.data.tr_symbol?.trim() || null;
@@ -114,7 +123,8 @@ router.post('/organizations/:id/units', (req, res) => {
           organizationId,
           code,
           name: enName,
-          symbol: symbolEn
+          symbol: symbolEn,
+          dimension
         });
 
         await trx('translations')
@@ -145,6 +155,7 @@ router.post('/organizations/:id/units', (req, res) => {
     .then((result) => {
       if (result.conflict) return res.status(409).json({ message: 'Unit code already exists' });
       if (result.invalidCode) return res.status(400).json({ message: 'Invalid EN name for code generation' });
+      if (result.invalidDimension) return res.status(400).json({ message: 'Invalid unit dimension' });
       if (result.missingSymbolTranslations) return res.status(400).json({ message: 'TR and EN symbol are required together' });
       return res.status(201).json({ unit: result.unit });
     })
@@ -172,6 +183,8 @@ router.patch('/units/:id', (req, res) => {
       if (!code) return { invalidCode: true };
       const enName = normalizeEnText(parsed.data.en_name);
       const trName = parsed.data.tr_name.trim();
+      const dimension = normalizeDimension(parsed.data.dimension ?? existing.dimension);
+      if (!UNIT_DIMENSIONS.includes(dimension)) return { invalidDimension: true };
 
       const rawEnSymbol = parsed.data.en_symbol?.trim() || null;
       const rawTrSymbol = parsed.data.tr_symbol?.trim() || null;
@@ -245,7 +258,8 @@ router.patch('/units/:id', (req, res) => {
           organizationId: existing.organization_id,
           code,
           name: enName,
-          symbol: symbolEn
+          symbol: symbolEn,
+          dimension
         });
       });
 
@@ -255,6 +269,7 @@ router.patch('/units/:id', (req, res) => {
       if (result.notFound) return res.status(404).json({ message: 'Unit not found' });
       if (result.conflict) return res.status(409).json({ message: 'Unit code already exists' });
       if (result.invalidCode) return res.status(400).json({ message: 'Invalid EN name for code generation' });
+      if (result.invalidDimension) return res.status(400).json({ message: 'Invalid unit dimension' });
       if (result.missingSymbolTranslations) return res.status(400).json({ message: 'TR and EN symbol are required together' });
       if (!result.unit) return res.status(404).json({ message: 'Unit not found' });
       return res.status(200).json({ unit: result.unit });

@@ -23,6 +23,7 @@ export async function listUnitsByOrganization(organizationId) {
       'u.code',
       'u.name',
       'u.symbol',
+      'u.dimension',
       'u.system',
       'u.created_at',
       'u.updated_at',
@@ -34,33 +35,35 @@ export async function listUnitsByOrganization(organizationId) {
 }
 
 export async function getUnitById(id) {
-  return db('units').where({ id }).first(['id', 'organization_id', 'code', 'name', 'symbol', 'system']);
+  return db('units').where({ id }).first(['id', 'organization_id', 'code', 'name', 'symbol', 'dimension', 'system']);
 }
 
-export async function createUnit(trx, { organizationId, code, name, symbol }) {
+export async function createUnit(trx, { organizationId, code, name, symbol, dimension }) {
   const rows = await trx('units')
     .insert({
       organization_id: organizationId,
       code,
       name,
       symbol: symbol ?? null,
+      dimension,
       system: false
     })
-    .returning(['id', 'organization_id', 'code', 'name', 'symbol', 'system', 'created_at', 'updated_at']);
+    .returning(['id', 'organization_id', 'code', 'name', 'symbol', 'dimension', 'system', 'created_at', 'updated_at']);
 
   return rows[0];
 }
 
-export async function updateUnit(trx, { id, organizationId, code, name, symbol }) {
+export async function updateUnit(trx, { id, organizationId, code, name, symbol, dimension }) {
   const rows = await trx('units')
     .where({ id, organization_id: organizationId })
     .update({
       code,
       name,
       symbol: symbol ?? null,
+      dimension,
       updated_at: trx.fn.now()
     })
-    .returning(['id', 'organization_id', 'code', 'name', 'symbol', 'system', 'created_at', 'updated_at']);
+    .returning(['id', 'organization_id', 'code', 'name', 'symbol', 'dimension', 'system', 'created_at', 'updated_at']);
 
   return rows[0] ?? null;
 }
