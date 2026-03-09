@@ -26,6 +26,10 @@ function inferSchemaHint(err) {
     return 'DB schema eksik (inventory item card fields). Backend tarafinda `npm run migrate` calistir.';
   }
 
+  if (code === '42703' && /material_role/i.test(message)) {
+    return 'DB schema eksik (inventory item card material role). Backend tarafinda `npm run migrate` calistir.';
+  }
+
   return null;
 }
 
@@ -165,6 +169,7 @@ const upsertSchema = z.object({
   name: z.string().trim().min(1).max(255),
   type_name: z.string().trim().max(255).optional().nullable(),
   specification: z.string().trim().max(255).optional().nullable(),
+  material_role: z.enum(['NORMAL', 'PACKAGING', 'CONSUMABLE']).optional(),
   fields: z
     .array(
       z.object({
@@ -216,6 +221,7 @@ router.post('/organizations/:id/inventory-item-cards', (req, res) => {
           name: parsed.data.name,
           typeName: parsed.data.type_name?.trim() || null,
           specification: parsed.data.specification?.trim() || null,
+          materialRole: parsed.data.material_role ?? 'NORMAL',
           fields
         })
       );
@@ -250,7 +256,7 @@ router.put('/organizations/:id/inventory-item-cards/:inventoryItemCardId', (req,
     .then(async () => {
       const existing = await db('inventory_item_cards')
         .where({ id: inventoryItemCardId, organization_id: organizationId })
-        .first(['id']);
+        .first(['id', 'material_role']);
       if (!existing) return { notFound: true };
 
       const conflict = await db('inventory_item_cards')
@@ -282,6 +288,7 @@ router.put('/organizations/:id/inventory-item-cards/:inventoryItemCardId', (req,
           name: parsed.data.name,
           typeName: parsed.data.type_name?.trim() || null,
           specification: parsed.data.specification?.trim() || null,
+          materialRole: parsed.data.material_role ?? existing.material_role ?? 'NORMAL',
           fields
         })
       );

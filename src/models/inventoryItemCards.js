@@ -9,6 +9,7 @@ const INVENTORY_ITEM_CARD_COLUMNS = [
   'name',
   'type_name',
   'specification',
+  'material_role',
   'created_at',
   'updated_at'
 ];
@@ -193,7 +194,7 @@ export async function getInventoryItemCardById(id) {
 
 export async function createInventoryItemCard(
   trx,
-  { organizationId, amountUnitId, code, name, typeName, specification, fields }
+  { organizationId, amountUnitId, code, name, typeName, specification, materialRole, fields }
 ) {
   const rows = await trx('inventory_item_cards')
     .insert({
@@ -202,7 +203,8 @@ export async function createInventoryItemCard(
       code,
       name,
       type_name: typeName ?? null,
-      specification: specification ?? null
+      specification: specification ?? null,
+      material_role: materialRole ?? 'NORMAL'
     })
     .returning(['id']);
 
@@ -221,7 +223,7 @@ export async function createInventoryItemCard(
 
 export async function updateInventoryItemCard(
   trx,
-  { organizationId, inventoryItemCardId, amountUnitId, code, name, typeName, specification, fields }
+  { organizationId, inventoryItemCardId, amountUnitId, code, name, typeName, specification, materialRole, fields }
 ) {
   const rows = await trx('inventory_item_cards')
     .where({ id: inventoryItemCardId, organization_id: organizationId })
@@ -231,6 +233,7 @@ export async function updateInventoryItemCard(
       name,
       type_name: typeName ?? null,
       specification: specification ?? null,
+      material_role: materialRole ?? 'NORMAL',
       updated_at: trx.fn.now()
     })
     .returning(['id']);

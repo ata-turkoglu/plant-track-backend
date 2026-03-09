@@ -709,7 +709,7 @@ router.post('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrd
       if (result.invalidStatus) return res.status(409).json({ message: 'Completed or cancelled work orders cannot be updated' });
       if (result.missingAssetLocationNode) return res.status(409).json({ message: 'Asset location node not found' });
       if (result.badItem) return res.status(404).json({ message: 'Inventory item not found' });
-      if (result.badItemType) return res.status(400).json({ message: 'Only spare part items can be consumed in maintenance' });
+      if (result.badItemType) return res.status(400).json({ message: 'Only equipment items can be consumed in maintenance' });
       if (result.badSourceNode) return res.status(404).json({ message: 'Source warehouse node not found' });
       if (result.badSourceNodeType) return res.status(400).json({ message: 'Source node must be a warehouse' });
       if (result.invalidTime) return res.status(400).json({ message: 'Invalid asset state transition time' });

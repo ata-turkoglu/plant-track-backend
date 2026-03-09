@@ -755,7 +755,7 @@ router.post('/organizations/:id/assets/:assetId/bom', (req, res) => {
     .then((result) => {
       if (result.notFound) return res.status(404).json({ message: 'Asset not found' });
       if (result.notFoundItem) return res.status(404).json({ message: 'Inventory item card not found' });
-      if (result.invalidItemType) return res.status(400).json({ message: 'Only spare part inventory item cards can be added to BOM' });
+      if (result.invalidItemType) return res.status(400).json({ message: 'Only equipment inventory item cards can be added to BOM' });
       if (result.conflict) return res.status(409).json({ message: 'Item already exists in BOM' });
       return res.status(201).json({ line: result.line });
     })
