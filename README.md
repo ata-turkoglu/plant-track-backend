@@ -21,7 +21,7 @@ Before backend changes, read schema doc first and align route/model behavior wit
   - `inventory_movement_events` (header)
   - `inventory_movement_lines` (lines)
 - Unified stock endpoints:
-  - `nodes` table (`WAREHOUSE`, `LOCATION`, `FIRM`, `ASSET`, `VIRTUAL`)
+  - `nodes` table (`WAREHOUSE`, `LOCATION`, `FIRM`, `ASSET`)
 - Balances:
   - computed from `POSTED` events only
   - `SUM(incoming) - SUM(outgoing)` by node/item

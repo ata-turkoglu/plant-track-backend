@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import db from '../db/knex.js';
 import { createOrganization } from '../models/organizations.js';
+import { ensureDefaultLocationTypesForOrganization } from '../models/locationTypes.js';
 import { createUser, getUserByEmail, getUserById, updateUserDefaultCurrency } from '../models/users.js';
 
 const router = Router();
@@ -105,6 +106,7 @@ router.post('/auth/register', (req, res) => {
 
       const result = await db.transaction(async (trx) => {
         const org = await createOrganization(trx, { name: organizationName, code: organizationCode });
+        await ensureDefaultLocationTypesForOrganization(trx, org.id);
         const admin = await createUser(trx, {
           organizationId: org.id,
           name: parsed.data.admin_name,

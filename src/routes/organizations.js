@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import db from '../db/knex.js';
 import { listLocationsByOrganization, createLocation } from '../models/locations.js';
+import { getLocationTypeById } from '../models/locationTypes.js';
 import { upsertRefNode } from '../models/nodes.js';
 import { loadOrganizationContext } from '../middleware/organizationContext.js';
 
@@ -53,7 +54,8 @@ router.get('/organizations/:id/locations', (req, res) => {
 
 const createLocationSchema = z.object({
   name: z.string().min(1).max(255),
-  parent_id: z.number().int().positive().optional().nullable()
+  parent_id: z.number().int().positive().optional().nullable(),
+  location_type_id: z.number().int().positive()
 });
 
 router.post('/organizations/:id/locations', (req, res) => {
@@ -76,11 +78,17 @@ router.post('/organizations/:id/locations', (req, res) => {
         }
       }
 
+      const locationType = await getLocationTypeById(parsed.data.location_type_id);
+      if (!locationType || locationType.organization_id !== organizationId) {
+        return { badLocationType: true };
+      }
+
       const location = await db.transaction(async (trx) =>
         createLocation(trx, {
           organizationId,
           parentId,
-          name: parsed.data.name
+          name: parsed.data.name,
+          locationTypeId: parsed.data.location_type_id
         }).then(async (created) => {
           await upsertRefNode(trx, {
             organizationId,
@@ -90,7 +98,8 @@ router.post('/organizations/:id/locations', (req, res) => {
             name: created.name,
             isStocked: true,
             metaJson: {
-              parent_id: created.parent_id ?? null
+              parent_id: created.parent_id ?? null,
+              location_type_id: created.location_type_id
             }
           });
 
@@ -102,6 +111,7 @@ router.post('/organizations/:id/locations', (req, res) => {
     })
     .then((result) => {
       if (result.badParent) return res.status(400).json({ message: 'Invalid parent location' });
+      if (result.badLocationType) return res.status(400).json({ message: 'Invalid location type' });
       return res.status(201).json({ location: result.location });
     })
     .catch(() => res.status(500).json({ message: 'Failed to create location' }));

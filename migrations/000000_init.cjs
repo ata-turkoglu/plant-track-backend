@@ -268,7 +268,7 @@ exports.up = async function up(knex) {
   });
 
   await knex.raw(
-    "alter table nodes add constraint nodes_node_type_check check (node_type in ('WAREHOUSE','LOCATION','SUPPLIER','CUSTOMER','ASSET','VIRTUAL'))"
+    "alter table nodes add constraint nodes_node_type_check check (node_type in ('WAREHOUSE','LOCATION','SUPPLIER','CUSTOMER','ASSET'))"
   );
 
   // Inventory movement ledger (header + lines)

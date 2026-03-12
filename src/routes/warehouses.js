@@ -27,10 +27,28 @@ router.get('/organizations/:id/warehouses', (req, res) => {
     .catch(() => res.status(500).json({ message: 'Failed to fetch warehouses' }));
 });
 
+const PRODUCT_WAREHOUSE_TYPE_CODES = new Set(['finished_good', 'finished_goods', 'product', 'products']);
+const SPARE_PART_WAREHOUSE_TYPE_CODES = new Set(['spare_part', 'sparepart']);
+
+function isProductWarehouseTypeCode(code) {
+  const normalized = String(code ?? '').trim().toLowerCase();
+  if (!normalized) return false;
+  if (PRODUCT_WAREHOUSE_TYPE_CODES.has(normalized)) return true;
+  return normalized.includes('finished') || normalized.includes('product') || normalized.includes('mamul');
+}
+
+function isSparePartWarehouseTypeCode(code) {
+  const normalized = String(code ?? '').trim().toLowerCase();
+  if (!normalized) return false;
+  if (SPARE_PART_WAREHOUSE_TYPE_CODES.has(normalized)) return true;
+  return normalized.includes('spare') || normalized.includes('yedek');
+}
+
 const createSchema = z.object({
   name: z.string().min(1).max(255),
   location_id: z.number().int().positive(),
-  warehouse_type_id: z.number().int().positive()
+  warehouse_type_id: z.number().int().positive(),
+  packaging_target_warehouse_id: z.number().int().positive().nullable().optional()
 });
 
 router.post('/organizations/:id/warehouses', (req, res) => {
@@ -51,12 +69,33 @@ router.post('/organizations/:id/warehouses', (req, res) => {
       const wt = await getWarehouseTypeById(parsed.data.warehouse_type_id);
       if (!wt || wt.organization_id !== organizationId) return { badType: true };
 
+      const requiresPackagingTargetWarehouse = isProductWarehouseTypeCode(wt.code);
+      const packagingTargetWarehouseId = requiresPackagingTargetWarehouse
+        ? parsed.data.packaging_target_warehouse_id ?? null
+        : null;
+
+      if (requiresPackagingTargetWarehouse && !packagingTargetWarehouseId) {
+        return { badPackagingTargetRequired: true };
+      }
+
+      if (packagingTargetWarehouseId) {
+        const targetWarehouse = await db('warehouses as w')
+          .leftJoin({ wt: 'warehouse_types' }, 'wt.id', 'w.warehouse_type_id')
+          .where({ 'w.id': packagingTargetWarehouseId, 'w.organization_id': organizationId })
+          .first(['w.id', db.raw('wt.code as warehouse_type_code')]);
+        if (!targetWarehouse) return { badPackagingTarget: true };
+        if (!isSparePartWarehouseTypeCode(targetWarehouse.warehouse_type_code)) {
+          return { badPackagingTargetType: true };
+        }
+      }
+
       const warehouse = await db.transaction(async (trx) =>
         createWarehouse(trx, {
           organizationId,
           locationId: parsed.data.location_id,
           name: parsed.data.name,
-          warehouseTypeId: parsed.data.warehouse_type_id
+          warehouseTypeId: parsed.data.warehouse_type_id,
+          packagingTargetWarehouseId
         }).then(async (created) => {
           await upsertRefNode(trx, {
             organizationId,
@@ -67,7 +106,8 @@ router.post('/organizations/:id/warehouses', (req, res) => {
             isStocked: true,
             metaJson: {
               location_id: created.location_id,
-              warehouse_type_id: created.warehouse_type_id
+              warehouse_type_id: created.warehouse_type_id,
+              packaging_target_warehouse_id: created.packaging_target_warehouse_id ?? null
             }
           });
           return created;
@@ -79,6 +119,13 @@ router.post('/organizations/:id/warehouses', (req, res) => {
     .then((result) => {
       if (result.badLocation) return res.status(400).json({ message: 'Invalid location' });
       if (result.badType) return res.status(400).json({ message: 'Invalid warehouse type' });
+      if (result.badPackagingTargetRequired) {
+        return res.status(400).json({ message: 'Packaging target warehouse is required for product warehouse type' });
+      }
+      if (result.badPackagingTarget) return res.status(400).json({ message: 'Invalid packaging target warehouse' });
+      if (result.badPackagingTargetType) {
+        return res.status(400).json({ message: 'Packaging target warehouse must be spare part warehouse type' });
+      }
       return res.status(201).json({ warehouse: result.warehouse });
     })
     .catch((err) => {
@@ -87,6 +134,7 @@ router.post('/organizations/:id/warehouses', (req, res) => {
         organizationId,
         locationId: parsed.data.location_id,
         warehouseTypeId: parsed.data.warehouse_type_id,
+        packagingTargetWarehouseId: parsed.data.packaging_target_warehouse_id ?? null,
         error: err?.message ?? String(err)
       });
       return res.status(500).json({ message: 'Failed to create warehouse' });
@@ -96,7 +144,8 @@ router.post('/organizations/:id/warehouses', (req, res) => {
 const patchSchema = z.object({
   name: z.string().min(1).max(255),
   location_id: z.number().int().positive(),
-  warehouse_type_id: z.number().int().positive()
+  warehouse_type_id: z.number().int().positive(),
+  packaging_target_warehouse_id: z.number().int().positive().nullable().optional()
 });
 
 router.patch('/warehouses/:id', (req, res) => {
@@ -123,13 +172,38 @@ router.patch('/warehouses/:id', (req, res) => {
       const wt = await getWarehouseTypeById(parsed.data.warehouse_type_id);
       if (!wt || wt.organization_id !== existing.organization_id) return { badType: true };
 
+      const requiresPackagingTargetWarehouse = isProductWarehouseTypeCode(wt.code);
+      const packagingTargetWarehouseId = requiresPackagingTargetWarehouse
+        ? parsed.data.packaging_target_warehouse_id ?? null
+        : null;
+
+      if (requiresPackagingTargetWarehouse && !packagingTargetWarehouseId) {
+        return { badPackagingTargetRequired: true };
+      }
+
+      if (packagingTargetWarehouseId && packagingTargetWarehouseId === id) {
+        return { badPackagingTargetSelf: true };
+      }
+
+      if (packagingTargetWarehouseId) {
+        const targetWarehouse = await db('warehouses as w')
+          .leftJoin({ wt: 'warehouse_types' }, 'wt.id', 'w.warehouse_type_id')
+          .where({ 'w.id': packagingTargetWarehouseId, 'w.organization_id': existing.organization_id })
+          .first(['w.id', db.raw('wt.code as warehouse_type_code')]);
+        if (!targetWarehouse) return { badPackagingTarget: true };
+        if (!isSparePartWarehouseTypeCode(targetWarehouse.warehouse_type_code)) {
+          return { badPackagingTargetType: true };
+        }
+      }
+
       const updated = await db.transaction(async (trx) =>
         updateWarehouse(trx, {
           id,
           organizationId: existing.organization_id,
           locationId: parsed.data.location_id,
           name: parsed.data.name,
-          warehouseTypeId: parsed.data.warehouse_type_id
+          warehouseTypeId: parsed.data.warehouse_type_id,
+          packagingTargetWarehouseId
         }).then(async (warehouse) => {
           if (!warehouse) return null;
           await upsertRefNode(trx, {
@@ -141,7 +215,8 @@ router.patch('/warehouses/:id', (req, res) => {
             isStocked: true,
             metaJson: {
               location_id: warehouse.location_id,
-              warehouse_type_id: warehouse.warehouse_type_id
+              warehouse_type_id: warehouse.warehouse_type_id,
+              packaging_target_warehouse_id: warehouse.packaging_target_warehouse_id ?? null
             }
           });
           return warehouse;
@@ -157,6 +232,18 @@ router.patch('/warehouses/:id', (req, res) => {
       }
       if (typeof updated === 'object' && updated !== null && 'badType' in updated) {
         return res.status(400).json({ message: 'Invalid warehouse type' });
+      }
+      if (typeof updated === 'object' && updated !== null && 'badPackagingTargetRequired' in updated) {
+        return res.status(400).json({ message: 'Packaging target warehouse is required for product warehouse type' });
+      }
+      if (typeof updated === 'object' && updated !== null && 'badPackagingTarget' in updated) {
+        return res.status(400).json({ message: 'Invalid packaging target warehouse' });
+      }
+      if (typeof updated === 'object' && updated !== null && 'badPackagingTargetType' in updated) {
+        return res.status(400).json({ message: 'Packaging target warehouse must be spare part warehouse type' });
+      }
+      if (typeof updated === 'object' && updated !== null && 'badPackagingTargetSelf' in updated) {
+        return res.status(400).json({ message: 'Packaging target warehouse cannot be the same warehouse' });
       }
       return res.status(200).json({ warehouse: updated });
     })

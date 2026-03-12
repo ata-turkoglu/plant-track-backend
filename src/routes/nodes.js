@@ -5,7 +5,7 @@ import { loadOrganizationContext } from '../middleware/organizationContext.js';
 
 const router = Router();
 router.use('/organizations/:id', loadOrganizationContext);
-const ALLOWED_NODE_TYPES = new Set(['WAREHOUSE', 'LOCATION', 'FIRM', 'ASSET', 'VIRTUAL']);
+const ALLOWED_NODE_TYPES = new Set(['WAREHOUSE', 'LOCATION', 'FIRM', 'ASSET']);
 
 router.get('/organizations/:id/nodes', (req, res) => {
   const organizationId = req.organizationId;

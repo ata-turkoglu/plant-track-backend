@@ -37,25 +37,6 @@ export async function findNodeByRef(organizationId, nodeType, refTable, refId) {
     .first(['id', 'organization_id', 'node_type', 'ref_table', 'ref_id', 'name']);
 }
 
-export async function upsertVirtualNode(trx, { organizationId, nodeType = 'VIRTUAL', key, name, code, isStocked = false, metaJson }) {
-  const rows = await trx('nodes')
-    .insert({
-      organization_id: organizationId,
-      node_type: nodeType,
-      ref_table: 'virtual',
-      ref_id: key,
-      code: code ?? null,
-      name,
-      is_stocked: isStocked,
-      meta_json: metaJson ?? null
-    })
-    .onConflict(['organization_id', 'node_type', 'ref_table', 'ref_id'])
-    .merge({ name, code: code ?? null, is_stocked: isStocked, meta_json: metaJson ?? null, updated_at: trx.fn.now() })
-    .returning(['id', 'organization_id', 'node_type', 'ref_table', 'ref_id', 'name']);
-
-  return rows[0];
-}
-
 export async function upsertRefNode(
   trx,
   { organizationId, nodeType, refTable, refId, name, code, isStocked = true, metaJson }

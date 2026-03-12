@@ -82,7 +82,7 @@ exports.up = async function up(knex) {
   if (hasNodes) {
     await knex.raw('alter table nodes drop constraint if exists nodes_node_type_check');
     await knex.raw(
-      "alter table nodes add constraint nodes_node_type_check check (node_type in ('WAREHOUSE','LOCATION','SUPPLIER','CUSTOMER','FIRM','ASSET','VIRTUAL'))"
+      "alter table nodes add constraint nodes_node_type_check check (node_type in ('WAREHOUSE','LOCATION','SUPPLIER','CUSTOMER','FIRM','ASSET'))"
     );
   }
 
@@ -273,7 +273,7 @@ exports.up = async function up(knex) {
   if (hasNodes) {
     await knex.raw('alter table nodes drop constraint if exists nodes_node_type_check');
     await knex.raw(
-      "alter table nodes add constraint nodes_node_type_check check (node_type in ('WAREHOUSE','LOCATION','FIRM','ASSET','VIRTUAL'))"
+      "alter table nodes add constraint nodes_node_type_check check (node_type in ('WAREHOUSE','LOCATION','FIRM','ASSET'))"
     );
   }
 };

@@ -2,13 +2,15 @@ import { Router } from 'express';
 import { z } from 'zod';
 
 import db from '../db/knex.js';
+import { getLocationTypeById } from '../models/locationTypes.js';
 import { getLocationById, hasChildren, updateLocation, deleteLocation } from '../models/locations.js';
 import { upsertRefNode, deleteRefNode } from '../models/nodes.js';
 
 const router = Router();
 
 const patchSchema = z.object({
-  name: z.string().min(1).max(255)
+  name: z.string().min(1).max(255),
+  location_type_id: z.number().int().positive()
 });
 
 router.patch('/locations/:id', (req, res) => {
@@ -27,11 +29,15 @@ router.patch('/locations/:id', (req, res) => {
       const existing = await getLocationById(id);
       if (!existing) return null;
 
+      const locationType = await getLocationTypeById(parsed.data.location_type_id);
+      if (!locationType || locationType.organization_id !== existing.organization_id) return { badLocationType: true };
+
       const updated = await db.transaction(async (trx) =>
         updateLocation(trx, {
           id,
           organizationId: existing.organization_id,
-          name: parsed.data.name
+          name: parsed.data.name,
+          locationTypeId: parsed.data.location_type_id
         }).then(async (location) => {
           if (!location) return null;
 
@@ -43,7 +49,8 @@ router.patch('/locations/:id', (req, res) => {
             name: location.name,
             isStocked: true,
             metaJson: {
-              parent_id: location.parent_id ?? null
+              parent_id: location.parent_id ?? null,
+              location_type_id: location.location_type_id
             }
           });
 
@@ -55,6 +62,9 @@ router.patch('/locations/:id', (req, res) => {
     })
     .then((updated) => {
       if (!updated) return res.status(404).json({ message: 'Location not found' });
+      if (typeof updated === 'object' && updated !== null && 'badLocationType' in updated) {
+        return res.status(400).json({ message: 'Invalid location type' });
+      }
       return res.status(200).json({ location: updated });
     })
     .catch(() => res.status(500).json({ message: 'Failed to update location' }));

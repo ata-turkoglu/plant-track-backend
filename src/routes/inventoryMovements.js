@@ -25,6 +25,12 @@ const lineSchema = z.object({
   currency_code: z.string().trim().min(1).max(8).optional().nullable()
 });
 
+const packagingLineSchema = z.object({
+  inventory_item_id: z.number().int().positive(),
+  quantity: z.number().positive(),
+  from_node_id: z.number().int().positive().optional()
+});
+
 const createSchema = z.object({
   event_type: z.string().min(1).max(32).optional(),
   status: z.enum(['DRAFT', 'POSTED', 'CANCELLED']).optional(),
@@ -33,6 +39,7 @@ const createSchema = z.object({
   reference_id: z.string().max(64).optional().nullable(),
   note: z.string().max(4000).optional().nullable(),
   lines: z.array(lineSchema).min(1).optional(),
+  packaging_lines: z.array(packagingLineSchema).optional(),
   inventory_item_id: z.number().int().positive().optional(),
   quantity: z.number().positive().optional(),
   amount_unit_id: z.number().int().positive().optional(),
@@ -71,10 +78,133 @@ function normalizeMovementType(raw) {
   return value;
 }
 
+async function resolvePackagingSourceNodeIdForSale(organizationId, validatedLines) {
+  const sourceNodeIds = Array.from(
+    new Set(
+      (validatedLines ?? [])
+        .map((line) => Number(line.fromNodeId))
+        .filter((value) => Number.isFinite(value) && value > 0)
+    )
+  );
+  if (sourceNodeIds.length !== 1) return { badPackagingSourceNode: true };
+
+  const saleSourceNode = await db('nodes')
+    .where({ organization_id: organizationId, id: sourceNodeIds[0] })
+    .first(['id', 'node_type', 'ref_table', 'ref_id']);
+  if (!saleSourceNode) return { badPackagingSourceNode: true };
+  if (
+    String(saleSourceNode.node_type ?? '').toUpperCase() !== 'WAREHOUSE' ||
+    String(saleSourceNode.ref_table ?? '').toLowerCase() !== 'warehouses'
+  ) {
+    return { badPackagingSourceNode: true };
+  }
+
+  const sourceWarehouseId = Number(saleSourceNode.ref_id);
+  if (!Number.isFinite(sourceWarehouseId) || sourceWarehouseId <= 0) return { badPackagingSourceNode: true };
+
+  const sourceWarehouse = await db('warehouses')
+    .where({ organization_id: organizationId, id: sourceWarehouseId })
+    .first(['id', 'packaging_target_warehouse_id']);
+
+  const packagingTargetWarehouseId = Number(sourceWarehouse?.packaging_target_warehouse_id ?? 0);
+  if (!Number.isFinite(packagingTargetWarehouseId) || packagingTargetWarehouseId <= 0) {
+    return { missingPackagingTargetWarehouse: true };
+  }
+
+  const packagingSourceNode = await db('nodes')
+    .where({
+      organization_id: organizationId,
+      node_type: 'WAREHOUSE',
+      ref_table: 'warehouses',
+      ref_id: String(packagingTargetWarehouseId)
+    })
+    .first(['id']);
+  if (!Number.isFinite(Number(packagingSourceNode?.id)) || Number(packagingSourceNode.id) <= 0) {
+    return { badPackagingSourceNode: true };
+  }
+
+  return { packagingSourceNodeId: Number(packagingSourceNode.id) };
+}
+
+async function validatePackagingLineInputs(organizationId, eventTypeRaw, packagingLines, { forcedFromNodeId } = {}) {
+  if (!Array.isArray(packagingLines) || packagingLines.length === 0) return { lines: [] };
+
+  const eventType = normalizeMovementType(eventTypeRaw);
+  if (eventType !== 'SALE') return { badPackagingEventType: true };
+
+  const normalizedPackagingLines = packagingLines.map((line) => ({
+    inventory_item_id: line.inventory_item_id,
+    quantity: Number(line.quantity),
+    from_node_id: Number(forcedFromNodeId ?? line.from_node_id ?? 0)
+  }));
+
+  if (
+    normalizedPackagingLines.some(
+      (line) =>
+        !Number.isFinite(line.inventory_item_id) ||
+        line.inventory_item_id <= 0 ||
+        !Number.isFinite(line.from_node_id) ||
+        line.from_node_id <= 0 ||
+        !Number.isFinite(line.quantity) ||
+        line.quantity <= 0
+    )
+  ) {
+    return { badPackagingLine: true };
+  }
+
+  const nodeIds = Array.from(new Set(normalizedPackagingLines.map((line) => line.from_node_id)));
+  const itemIds = Array.from(new Set(normalizedPackagingLines.map((line) => line.inventory_item_id)));
+
+  const [nodes, items] = await Promise.all([
+    db('nodes')
+      .where({ organization_id: organizationId })
+      .whereIn('id', nodeIds)
+      .select(['id', 'node_type']),
+    db('inventory_items as ii')
+      .leftJoin({ iic: 'inventory_item_cards' }, function joinInventoryItemCard() {
+        this.on('iic.id', '=', 'ii.inventory_item_card_id').andOn('iic.organization_id', '=', 'ii.organization_id');
+      })
+      .where('ii.organization_id', organizationId)
+      .whereIn('ii.id', itemIds)
+      .select(['ii.id', 'ii.amount_unit_id', db.raw("upper(coalesce(iic.material_role, 'NORMAL')) as material_role")])
+  ]);
+
+  const nodeById = new Map(nodes.map((row) => [row.id, row]));
+  const itemById = new Map(items.map((row) => [row.id, row]));
+
+  const mergedByKey = new Map();
+  for (const line of normalizedPackagingLines) {
+    const sourceNode = nodeById.get(line.from_node_id);
+    if (!sourceNode) return { badPackagingSourceNode: true };
+    if (String(sourceNode.node_type ?? '').toUpperCase() !== 'WAREHOUSE') return { badPackagingSourceNodeType: true };
+
+    const item = itemById.get(line.inventory_item_id);
+    if (!item) return { badPackagingItem: true };
+    if (String(item.material_role ?? '').toUpperCase() !== 'PACKAGING') return { badPackagingItemType: true };
+    if (!Number.isFinite(Number(item.amount_unit_id)) || Number(item.amount_unit_id) <= 0) return { badPackagingUnit: true };
+
+    const key = `${line.from_node_id}:${line.inventory_item_id}`;
+    const current = mergedByKey.get(key);
+    if (current) {
+      current.quantity += line.quantity;
+      continue;
+    }
+
+    mergedByKey.set(key, {
+      inventoryItemId: line.inventory_item_id,
+      quantity: line.quantity,
+      unitId: Number(item.amount_unit_id),
+      fromNodeId: line.from_node_id
+    });
+  }
+
+  return { lines: Array.from(mergedByKey.values()) };
+}
+
 async function validateLineInputs(organizationId, eventTypeRaw, lines) {
   const eventType = normalizeMovementType(eventTypeRaw);
   const requiresCommercial = eventType === 'PURCHASE' || eventType === 'SALE';
-  const internalNodeTypes = new Set(['WAREHOUSE', 'LOCATION', 'VIRTUAL']);
+  const internalNodeTypes = new Set(['WAREHOUSE', 'LOCATION']);
 
   for (const line of lines) {
     if (line.from_node_id === line.to_node_id) return { sameNode: true };
@@ -229,11 +359,13 @@ router.post('/organizations/:id/inventory-movements', (req, res) => {
   if (linesInput.length === 0) {
     return res.status(400).json({ message: 'At least one line is required' });
   }
+  const packagingLinesInput = parsed.data.packaging_lines ?? [];
 
   return Promise.resolve()
     .then(async () => {
       const eventType = parsed.data.event_type ?? 'TRANSFER';
-      const valid = await validateLineInputs(organizationId, eventType, linesInput);
+      const normalizedEventType = normalizeMovementType(eventType);
+      const valid = await validateLineInputs(organizationId, normalizedEventType, linesInput);
       if (valid.sameNode) return { sameNode: true };
       if (valid.badFromNode) return { badFromNode: true };
       if (valid.badToNode) return { badToNode: true };
@@ -244,20 +376,61 @@ router.post('/organizations/:id/inventory-movements', (req, res) => {
       if (valid.badFromNodeType) return { badFromNodeType: true };
       if (valid.badToNodeType) return { badToNodeType: true };
 
+      let packagingSourceNodeId = null;
+      if (normalizedEventType === 'SALE' && packagingLinesInput.length > 0) {
+        const resolvedPackagingSource = await resolvePackagingSourceNodeIdForSale(organizationId, valid.lines);
+        if (resolvedPackagingSource.badPackagingSourceNode) return { badPackagingSourceNode: true };
+        if (resolvedPackagingSource.missingPackagingTargetWarehouse) return { missingPackagingTargetWarehouse: true };
+        packagingSourceNodeId = resolvedPackagingSource.packagingSourceNodeId;
+      }
+
+      const validPackaging = await validatePackagingLineInputs(organizationId, normalizedEventType, packagingLinesInput, {
+        forcedFromNodeId: packagingSourceNodeId
+      });
+      if (validPackaging.badPackagingEventType) return { badPackagingEventType: true };
+      if (validPackaging.badPackagingLine) return { badPackagingLine: true };
+      if (validPackaging.badPackagingSourceNode) return { badPackagingSourceNode: true };
+      if (validPackaging.badPackagingSourceNodeType) return { badPackagingSourceNodeType: true };
+      if (validPackaging.badPackagingItem) return { badPackagingItem: true };
+      if (validPackaging.badPackagingItemType) return { badPackagingItemType: true };
+      if (validPackaging.badPackagingUnit) return { badPackagingUnit: true };
+
+      let packagingTargetNodeId = null;
+      if (validPackaging.lines.length > 0) {
+        const targetNodeIds = Array.from(new Set(valid.lines.map((line) => line.toNodeId).filter((value) => Number.isFinite(value))));
+        if (targetNodeIds.length !== 1) return { badPackagingTargetNode: true };
+        packagingTargetNodeId = targetNodeIds[0];
+      }
+
       const occurredAt = parsed.data.occurred_at ? new Date(parsed.data.occurred_at) : undefined;
 
       const created = await db.transaction(async (trx) =>
-        createMovementEvent(trx, {
-          organizationId,
-          eventType: normalizeMovementType(eventType),
-          status: 'DRAFT',
-          occurredAt,
-          referenceType: parsed.data.reference_type,
-          referenceId: parsed.data.reference_id,
-          note: parsed.data.note,
-          createdByUserId: null,
-          lines: valid.lines
-        })
+        {
+          const allLines = [
+            ...valid.lines,
+            ...validPackaging.lines.map((line) => ({
+              inventoryItemId: line.inventoryItemId,
+              quantity: line.quantity,
+              unitId: line.unitId,
+              fromNodeId: line.fromNodeId,
+              toNodeId: packagingTargetNodeId,
+              unitPrice: null,
+              currencyCode: null
+            }))
+          ];
+
+          return createMovementEvent(trx, {
+            organizationId,
+            eventType: normalizedEventType,
+            status: 'DRAFT',
+            occurredAt,
+            referenceType: parsed.data.reference_type,
+            referenceId: parsed.data.reference_id,
+            note: parsed.data.note,
+            createdByUserId: null,
+            lines: allLines
+          });
+        }
       );
 
       return created;
@@ -270,6 +443,15 @@ router.post('/organizations/:id/inventory-movements', (req, res) => {
       if (result.badCurrency) return res.status(400).json({ message: 'Invalid currency code' });
       if (result.badUnitPrice) return res.status(400).json({ message: 'Invalid unit price' });
       if (result.badFromNodeType || result.badToNodeType) return res.status(400).json({ message: 'Invalid movement nodes for event type' });
+      if (result.badPackagingEventType) return res.status(400).json({ message: 'Packaging lines are only supported for sale' });
+      if (result.badPackagingLine) return res.status(400).json({ message: 'Invalid packaging line' });
+      if (result.badPackagingSourceNode) return res.status(400).json({ message: 'Invalid packaging source node' });
+      if (result.badPackagingSourceNodeType) return res.status(400).json({ message: 'Packaging source node must be a warehouse' });
+      if (result.badPackagingItem) return res.status(400).json({ message: 'Invalid packaging item' });
+      if (result.badPackagingItemType) return res.status(400).json({ message: 'Only packaging items can be used in packaging lines' });
+      if (result.badPackagingUnit) return res.status(400).json({ message: 'Invalid packaging item unit' });
+      if (result.missingPackagingTargetWarehouse) return res.status(400).json({ message: 'Packaging target warehouse is not configured for source warehouse' });
+      if (result.badPackagingTargetNode) return res.status(400).json({ message: 'Invalid packaging target node' });
       if (result.sameNode) return res.status(400).json({ message: 'From and to node cannot be same' });
       // eslint-disable-next-line no-console
       console.info('[inventory-movements:create]', {
@@ -285,6 +467,7 @@ router.post('/organizations/:id/inventory-movements', (req, res) => {
       console.error('[inventory-movements:create] failed', {
         organizationId,
         lineCount: linesInput.length,
+        packagingLineCount: packagingLinesInput.length,
         error: err?.message ?? String(err)
       });
       return res.status(500).json({ message: 'Failed to create movement event' });
