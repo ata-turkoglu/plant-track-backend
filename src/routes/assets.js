@@ -43,8 +43,8 @@ function buildAssetNodeMeta(asset) {
     parent_asset_id: asset.parent_asset_id ?? null,
     asset_card_id: asset.asset_card_id ?? null,
     current_state: asset.current_state,
-    running_since: asset.running_since ?? null,
-    runtime_seconds: asset.runtime_seconds ?? 0
+    runtime_meter_value: asset.runtime_meter_value ?? 0,
+    runtime_meter_unit: asset.runtime_meter_unit ?? 'HOUR'
   };
 }
 
@@ -83,6 +83,52 @@ function normalizeAssetImageUrl(value) {
   return undefined;
 }
 
+function normalizeRuntimeMeterUnit(value) {
+  return value === 'KM' ? 'KM' : 'HOUR';
+}
+
+async function listRuntimeUnitHierarchyMismatches(organizationId, { limit = 200 } = {}) {
+  const baseQuery = db('assets as child')
+    .join('assets as parent', function joinParent() {
+      this.on('parent.id', '=', 'child.parent_asset_id').andOn('parent.organization_id', '=', 'child.organization_id');
+    })
+    .where({ 'child.organization_id': organizationId })
+    .andWhereRaw(
+      `
+        (case when child.runtime_meter_unit = 'KM' then 'KM' else 'HOUR' end)
+        <>
+        (case when parent.runtime_meter_unit = 'KM' then 'KM' else 'HOUR' end)
+      `
+    );
+
+  const [{ count }] = await baseQuery.clone().clearSelect().count({ count: 'child.id' });
+
+  const rows = await baseQuery
+    .clone()
+    .select([
+      'child.id as child_asset_id',
+      'child.name as child_asset_name',
+      'child.runtime_meter_unit as child_runtime_meter_unit',
+      'parent.id as parent_asset_id',
+      'parent.name as parent_asset_name',
+      'parent.runtime_meter_unit as parent_runtime_meter_unit'
+    ])
+    .orderBy([
+      { column: 'parent.id', order: 'asc' },
+      { column: 'child.id', order: 'asc' }
+    ])
+    .limit(Math.max(1, Math.min(Number(limit) || 200, 1000)));
+
+  return {
+    totalCount: Number(count) || 0,
+    rows: rows.map((row) => ({
+      ...row,
+      child_runtime_meter_unit: normalizeRuntimeMeterUnit(row.child_runtime_meter_unit),
+      parent_runtime_meter_unit: normalizeRuntimeMeterUnit(row.parent_runtime_meter_unit)
+    }))
+  };
+}
+
 function mapAssetTypeFieldsToSchemaRows(rows) {
   return rows
     .map((row) => ({
@@ -96,11 +142,15 @@ function mapAssetTypeFieldsToSchemaRows(rows) {
 }
 
 async function resolveAssetCardSchemaRows(organizationId, assetCardId) {
-  const card = await db('asset_cards').where({ id: assetCardId, organization_id: organizationId }).first(['id']);
+  const card = await db('asset_cards').where({ id: assetCardId, organization_id: organizationId }).first(['id', 'runtime_meter_unit']);
   if (!card) return { notFound: true };
 
   const fieldRows = await listAssetCardFieldsByAssetCard(organizationId, assetCardId);
-  return { notFound: false, schemaRows: mapAssetTypeFieldsToSchemaRows(fieldRows) };
+  return {
+    notFound: false,
+    schemaRows: mapAssetTypeFieldsToSchemaRows(fieldRows),
+    runtimeMeterUnit: card.runtime_meter_unit === 'KM' ? 'KM' : 'HOUR'
+  };
 }
 
 function unwrapAttributeValue(raw) {
@@ -232,6 +282,120 @@ router.get('/organizations/:id/assets', (req, res) => {
     .catch(() => res.status(500).json({ message: 'Failed to fetch assets' }));
 });
 
+router.get('/organizations/:id/assets/runtime-unit-integrity', (req, res) => {
+  const organizationId = req.organizationId;
+  const limitRaw = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
+
+  return Promise.resolve()
+    .then(async () => {
+      const { totalCount, rows } = await listRuntimeUnitHierarchyMismatches(organizationId, {
+        limit: Number.isFinite(limitRaw) ? limitRaw : 200
+      });
+      return { totalCount, rows };
+    })
+    .then((result) =>
+      res.status(200).json({
+        ok: result.totalCount === 0,
+        mismatchCount: result.totalCount,
+        mismatches: result.rows
+      })
+    )
+    .catch(() => res.status(500).json({ message: 'Failed to validate runtime unit integrity' }));
+});
+
+const runtimeAdjustmentSchema = z.object({
+  asset_ids: z.array(z.number().int().positive()).min(1),
+  delta: z.number().positive(),
+  include_descendants: z.boolean().optional()
+});
+
+router.post('/organizations/:id/assets/runtime-adjustments', (req, res) => {
+  const organizationId = req.organizationId;
+  const parsed = runtimeAdjustmentSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: 'Validation failed', errors: parsed.error.flatten() });
+
+  const requestedIds = Array.from(new Set(parsed.data.asset_ids.map((id) => Number(id))));
+  const delta = Number(parsed.data.delta);
+  const includeDescendants = parsed.data.include_descendants !== false;
+
+  return Promise.resolve()
+    .then(async () => {
+      const result = await db.transaction(async (trx) => {
+        let updatedIds = [];
+
+        if (includeDescendants) {
+          const updateResult = await trx.raw(
+            `
+              with recursive asset_tree as (
+                select a.id, a.parent_asset_id
+                from assets a
+                where a.organization_id = ?
+                  and a.id = any(?::int[])
+                union all
+                select child.id, child.parent_asset_id
+                from assets child
+                join asset_tree t on child.parent_asset_id = t.id
+                where child.organization_id = ?
+              ),
+              target as (
+                select distinct id from asset_tree
+              )
+              update assets a
+              set runtime_meter_value = round((coalesce(a.runtime_meter_value, 0)::numeric + ?::numeric), 3),
+                  updated_at = now()
+              from target
+              where a.organization_id = ?
+                and a.id = target.id
+              returning a.id
+            `,
+            [organizationId, requestedIds, organizationId, delta, organizationId]
+          );
+          updatedIds = (updateResult?.rows ?? []).map((row) => Number(row.id));
+        } else {
+          const updated = await trx('assets')
+            .where({ organization_id: organizationId })
+            .whereIn('id', requestedIds)
+            .update({
+              runtime_meter_value: trx.raw('round((coalesce(runtime_meter_value, 0)::numeric + ?::numeric), 3)', [delta]),
+              updated_at: trx.fn.now()
+            })
+            .returning(['id']);
+          updatedIds = updated.map((row) => Number(row.id));
+        }
+
+        if (updatedIds.length === 0) return { notFound: true };
+
+        await trx.raw(
+          `
+            update nodes n
+            set meta_json = jsonb_set(coalesce(n.meta_json, '{}'::jsonb), '{runtime_meter_value}', to_jsonb(a.runtime_meter_value), true),
+                updated_at = now()
+            from assets a
+            where a.organization_id = ?
+              and a.id = any(?::int[])
+              and n.organization_id = a.organization_id
+              and n.node_type = 'ASSET'
+              and n.ref_table = 'assets'
+              and n.ref_id = a.id::text
+          `,
+          [organizationId, updatedIds]
+        );
+
+        return { updatedIds };
+      });
+
+      return result;
+    })
+    .then((result) => {
+      if (result.notFound) return res.status(404).json({ message: 'Assets not found' });
+      return res.status(200).json({
+        updated_count: result.updatedIds.length,
+        asset_ids: result.updatedIds
+      });
+    })
+    .catch(() => res.status(500).json({ message: 'Failed to apply runtime adjustment' }));
+});
+
 router.get('/organizations/:id/assets/:assetId', (req, res) => {
   const organizationId = req.organizationId;
   const assetId = Number(req.params.assetId);
@@ -253,6 +417,8 @@ const createSchema = z.object({
   asset_type_id: z.number().int().positive().optional().nullable(),
   code: z.string().min(1).max(64).optional().nullable(),
   name: z.string().min(1).max(255),
+  runtime_meter_value: z.number().nonnegative().optional(),
+  runtime_meter_unit: z.enum(['HOUR', 'KM']).optional(),
   image_url: z.string().max(4_000_000).optional().nullable(),
   attributes_json: z.unknown().optional().nullable()
 });
@@ -266,6 +432,8 @@ router.post('/organizations/:id/assets', (req, res) => {
   return Promise.resolve()
     .then(async () => {
       let attributesJson = parsed.data.attributes_json ?? null;
+      let runtimeMeterUnit = parsed.data.runtime_meter_unit;
+      let parentRuntimeMeterUnit = null;
       const imageUrl = normalizeAssetImageUrl(parsed.data.image_url);
       if (imageUrl === undefined) return { invalidImage: true };
       const shouldStoreImageInLocalBucket = typeof imageUrl === 'string' && imageUrl.toLowerCase().startsWith('data:image/');
@@ -275,8 +443,11 @@ router.post('/organizations/:id/assets', (req, res) => {
       if (!location) return { notFoundLocation: true };
 
       if (parsed.data.parent_asset_id) {
-        const parent = await db('assets').where({ id: parsed.data.parent_asset_id, organization_id: organizationId }).first(['id']);
+        const parent = await db('assets')
+          .where({ id: parsed.data.parent_asset_id, organization_id: organizationId })
+          .first(['id', 'runtime_meter_unit']);
         if (!parent) return { notFoundParent: true };
+        parentRuntimeMeterUnit = normalizeRuntimeMeterUnit(parent.runtime_meter_unit);
       }
 
       const resolvedAssetCardId = parsed.data.asset_card_id ?? parsed.data.asset_type_id ?? null;
@@ -288,6 +459,16 @@ router.post('/organizations/:id/assets', (req, res) => {
         const normalizedAttr = normalizeAttributesBySchema(parsed.data.attributes_json ?? null, schemaRows);
         if (!normalizedAttr.ok) return { invalidAttributes: normalizedAttr.message };
         attributesJson = normalizedAttr.value;
+        runtimeMeterUnit = resolvedType.runtimeMeterUnit;
+      }
+
+      const normalizedRuntimeMeterUnit = normalizeRuntimeMeterUnit(runtimeMeterUnit);
+      if (parentRuntimeMeterUnit && normalizedRuntimeMeterUnit !== parentRuntimeMeterUnit) {
+        return {
+          parentRuntimeUnitMismatch: true,
+          runtimeMeterUnit: normalizedRuntimeMeterUnit,
+          parentRuntimeMeterUnit
+        };
       }
 
       const asset = await db.transaction(async (trx) => {
@@ -298,6 +479,8 @@ router.post('/organizations/:id/assets', (req, res) => {
           assetCardId: resolvedAssetCardId,
           code: parsed.data.code ?? null,
           name: parsed.data.name,
+          runtimeMeterValue: parsed.data.runtime_meter_value,
+          runtimeMeterUnit: normalizedRuntimeMeterUnit,
           imageUrl: shouldStoreImageInLocalBucket ? null : imageUrl,
           attributesJson
         });
@@ -349,6 +532,13 @@ router.post('/organizations/:id/assets', (req, res) => {
       if (result.invalidImage) return res.status(400).json({ message: 'Invalid image_url. Use /api/public/files URL, http(s) URL, or data:image payload.' });
       if (result.notFoundLocation) return res.status(404).json({ message: 'Location not found' });
       if (result.notFoundParent) return res.status(404).json({ message: 'Parent asset not found' });
+      if (result.parentRuntimeUnitMismatch) {
+        return res.status(409).json({
+          message: 'Parent and child assets must use the same runtime meter unit',
+          runtime_meter_unit: result.runtimeMeterUnit,
+          parent_runtime_meter_unit: result.parentRuntimeMeterUnit
+        });
+      }
       if (result.notFoundType) return res.status(404).json({ message: 'Asset card not found' });
       if (result.invalidAttributes) return res.status(400).json({ message: result.invalidAttributes });
       return res.status(201).json({ asset: result.asset });
@@ -362,6 +552,8 @@ const updateSchema = z.object({
   asset_type_id: z.number().int().positive().optional().nullable(),
   code: z.string().min(1).max(64).optional().nullable(),
   name: z.string().min(1).max(255),
+  runtime_meter_value: z.number().nonnegative().optional(),
+  runtime_meter_unit: z.enum(['HOUR', 'KM']).optional(),
   image_url: z.string().max(4_000_000).optional().nullable(),
   attributes_json: z.unknown().optional().nullable()
 });
@@ -377,10 +569,11 @@ router.put('/organizations/:id/assets/:assetId', (req, res) => {
   return Promise.resolve()
     .then(async () => {
       let attributesJson = parsed.data.attributes_json ?? null;
+      let runtimeMeterUnit = parsed.data.runtime_meter_unit;
 
       const existing = await db('assets')
         .where({ id: assetId, organization_id: organizationId })
-        .first(['id', 'location_id', 'image_url']);
+        .first(['id', 'location_id', 'image_url', 'parent_asset_id', 'runtime_meter_unit']);
       if (!existing) return { notFound: true };
 
       const imageUrlInput = normalizeAssetImageUrl(parsed.data.image_url);
@@ -400,12 +593,6 @@ router.put('/organizations/:id/assets/:assetId', (req, res) => {
         imageUrl = stored.publicUrl;
       }
 
-      if (parsed.data.parent_asset_id) {
-        if (parsed.data.parent_asset_id === assetId) return { selfParent: true };
-        const parent = await db('assets').where({ id: parsed.data.parent_asset_id, organization_id: organizationId }).first(['id']);
-        if (!parent) return { notFoundParent: true };
-      }
-
       const resolvedAssetCardId = parsed.data.asset_card_id ?? parsed.data.asset_type_id ?? null;
       if (resolvedAssetCardId) {
         const resolvedType = await resolveAssetCardSchemaRows(organizationId, resolvedAssetCardId);
@@ -415,16 +602,64 @@ router.put('/organizations/:id/assets/:assetId', (req, res) => {
         const normalizedAttr = normalizeAttributesBySchema(parsed.data.attributes_json ?? null, schemaRows);
         if (!normalizedAttr.ok) return { invalidAttributes: normalizedAttr.message };
         attributesJson = normalizedAttr.value;
+        runtimeMeterUnit = resolvedType.runtimeMeterUnit;
       }
+
+      const currentParentAssetId = existing.parent_asset_id ?? null;
+      const nextParentAssetId = parsed.data.parent_asset_id ?? null;
+      const currentRuntimeMeterUnit = normalizeRuntimeMeterUnit(existing.runtime_meter_unit);
+      const nextRuntimeMeterUnit =
+        runtimeMeterUnit === 'HOUR' || runtimeMeterUnit === 'KM' ? runtimeMeterUnit : currentRuntimeMeterUnit;
+      const parentChanged = nextParentAssetId !== currentParentAssetId;
+      const runtimeUnitChanged = nextRuntimeMeterUnit !== currentRuntimeMeterUnit;
+
+      if (nextParentAssetId) {
+        if (nextParentAssetId === assetId) return { selfParent: true };
+        if (parentChanged || runtimeUnitChanged) {
+          const parent = await db('assets')
+            .where({ id: nextParentAssetId, organization_id: organizationId })
+            .first(['id', 'runtime_meter_unit']);
+          if (!parent) return { notFoundParent: true };
+
+          const parentRuntimeMeterUnit = normalizeRuntimeMeterUnit(parent.runtime_meter_unit);
+          if (parentRuntimeMeterUnit !== nextRuntimeMeterUnit) {
+            return {
+              parentRuntimeUnitMismatch: true,
+              runtimeMeterUnit: nextRuntimeMeterUnit,
+              parentRuntimeMeterUnit
+            };
+          }
+        }
+      }
+
+      if (runtimeUnitChanged) {
+        const child = await db('assets')
+          .where({ organization_id: organizationId, parent_asset_id: assetId })
+          .andWhereRaw(`(case when runtime_meter_unit = 'KM' then 'KM' else 'HOUR' end) <> ?`, [nextRuntimeMeterUnit])
+          .first(['id', 'runtime_meter_unit']);
+
+        if (child) {
+          return {
+            childRuntimeUnitMismatch: true,
+            runtimeMeterUnit: nextRuntimeMeterUnit,
+            childRuntimeMeterUnit: normalizeRuntimeMeterUnit(child.runtime_meter_unit),
+            childAssetId: child.id
+          };
+        }
+      }
+
+      const runtimeMeterUnitForUpdate = runtimeUnitChanged ? nextRuntimeMeterUnit : undefined;
 
       const asset = await db.transaction(async (trx) => {
         const updated = await updateAsset(trx, {
           organizationId,
           assetId,
-          parentAssetId: parsed.data.parent_asset_id ?? null,
+          parentAssetId: nextParentAssetId,
           assetCardId: resolvedAssetCardId,
           code: parsed.data.code ?? null,
           name: parsed.data.name,
+          runtimeMeterValue: parsed.data.runtime_meter_value,
+          runtimeMeterUnit: runtimeMeterUnitForUpdate,
           imageUrl,
           attributesJson
         });
@@ -455,6 +690,21 @@ router.put('/organizations/:id/assets/:assetId', (req, res) => {
       if (result.notFound) return res.status(404).json({ message: 'Asset not found' });
       if (result.selfParent) return res.status(400).json({ message: 'Asset cannot be its own parent' });
       if (result.notFoundParent) return res.status(404).json({ message: 'Parent asset not found' });
+      if (result.parentRuntimeUnitMismatch) {
+        return res.status(409).json({
+          message: 'Parent and child assets must use the same runtime meter unit',
+          runtime_meter_unit: result.runtimeMeterUnit,
+          parent_runtime_meter_unit: result.parentRuntimeMeterUnit
+        });
+      }
+      if (result.childRuntimeUnitMismatch) {
+        return res.status(409).json({
+          message: 'Asset runtime meter unit must match all child assets',
+          runtime_meter_unit: result.runtimeMeterUnit,
+          child_runtime_meter_unit: result.childRuntimeMeterUnit,
+          child_asset_id: result.childAssetId
+        });
+      }
       if (result.notFoundType) return res.status(404).json({ message: 'Asset card not found' });
       if (result.invalidAttributes) return res.status(400).json({ message: result.invalidAttributes });
       if (!result.asset) return res.status(404).json({ message: 'Asset not found' });
@@ -603,20 +853,10 @@ router.post('/organizations/:id/assets/:assetId/state', (req, res) => {
 
         if (locked.current_state === parsed.data.to_state) return locked;
 
-        if (locked.current_state === 'RUNNING' && locked.running_since) {
-          if (occurredAt.getTime() < new Date(locked.running_since).getTime()) {
-            return { invalidTime: true };
-          }
-        }
-
         const updated = await updateAssetState(trx, {
           organizationId,
           assetId,
-          currentState: locked.current_state,
-          runningSince: locked.running_since,
-          runtimeSeconds: locked.runtime_seconds,
-          toState: parsed.data.to_state,
-          occurredAt
+          toState: parsed.data.to_state
         });
         if (!updated) return null;
 
@@ -644,11 +884,9 @@ router.post('/organizations/:id/assets/:assetId/state', (req, res) => {
         return updated;
       });
 
-      if (asset && asset.invalidTime) return { invalidTime: true };
       return { asset };
     })
     .then((result) => {
-      if (result.invalidTime) return res.status(400).json({ message: 'Invalid occurred_at for current running state' });
       if (!result.asset) return res.status(404).json({ message: 'Asset not found' });
       return res.status(200).json({ asset: result.asset });
     })

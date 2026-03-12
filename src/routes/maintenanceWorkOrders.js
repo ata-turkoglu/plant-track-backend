@@ -69,8 +69,8 @@ function buildAssetNodeMeta(asset) {
     parent_asset_id: asset.parent_asset_id ?? null,
     asset_card_id: asset.asset_card_id ?? null,
     current_state: asset.current_state,
-    running_since: asset.running_since ?? null,
-    runtime_seconds: asset.runtime_seconds ?? 0
+    runtime_meter_value: asset.runtime_meter_value ?? 0,
+    runtime_meter_unit: asset.runtime_meter_unit ?? 'HOUR'
   };
 }
 
@@ -104,21 +104,10 @@ async function transitionAssetState(trx, { organizationId, assetId, toState, occ
 
   if (locked.current_state === toState) return { ok: true, asset: locked };
 
-  if (locked.current_state === 'RUNNING' && locked.running_since) {
-    const runningSince = new Date(locked.running_since).getTime();
-    if (Number.isFinite(runningSince) && occurredAt.getTime() < runningSince) {
-      return { invalidTime: true };
-    }
-  }
-
   const updated = await updateAssetState(trx, {
     organizationId,
     assetId,
-    currentState: locked.current_state,
-    runningSince: locked.running_since,
-    runtimeSeconds: locked.runtime_seconds,
-    toState,
-    occurredAt
+    toState
   });
   if (!updated) return { notFoundAsset: true };
 
@@ -328,21 +317,19 @@ router.post('/organizations/:id/assets/:assetId/maintenance-work-orders', (req, 
         });
 
         if (parsed.data.requested_state) {
-          const stateResult = await transitionAssetState(trx, {
+          await transitionAssetState(trx, {
             organizationId,
             assetId,
             toState: parsed.data.requested_state,
             occurredAt: new Date(),
             note: `Maintenance work order #${workOrder.id} opened`
           });
-          if (stateResult.invalidTime) return { invalidTime: true };
         }
 
         return workOrder;
       });
 
       if (created?.notFound) return { notFound: true };
-      if (created?.invalidTime) return { invalidTime: true };
 
       const workOrder = await getMaintenanceWorkOrderById(organizationId, created.id);
       return { workOrder };
@@ -352,7 +339,6 @@ router.post('/organizations/:id/assets/:assetId/maintenance-work-orders', (req, 
       if (result.badFirm) return res.status(404).json({ message: 'Assigned firm not found' });
       if (result.badEmployee) return res.status(404).json({ message: 'Assigned employee not found' });
       if (result.notFound) return res.status(404).json({ message: 'Asset not found' });
-      if (result.invalidTime) return res.status(400).json({ message: 'Invalid asset state transition time' });
       return res.status(201).json({ workOrder: result.workOrder });
     })
     .catch(() => res.status(500).json({ message: 'Failed to create maintenance work order' }));
@@ -410,14 +396,13 @@ router.put('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrde
         });
 
         if (parsed.data.requested_state) {
-          const stateResult = await transitionAssetState(trx, {
+          await transitionAssetState(trx, {
             organizationId,
             assetId,
             toState: parsed.data.requested_state,
             occurredAt: new Date(),
             note: `Maintenance work order #${workOrderId} updated`
           });
-          if (stateResult.invalidTime) return { invalidTime: true };
         }
 
         return {
@@ -426,7 +411,7 @@ router.put('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrde
         };
       });
 
-      if (updated?.notFound || updated?.invalidStatus || updated?.invalidTime) return updated;
+      if (updated?.notFound || updated?.invalidStatus) return updated;
       if (!updated?.workOrder?.id) return { notFound: true };
       const workOrder = await getMaintenanceWorkOrderById(organizationId, updated.workOrder.id);
       if (!workOrder) return { notFound: true };
@@ -444,7 +429,6 @@ router.put('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrde
       if (result.badEmployee) return res.status(404).json({ message: 'Assigned employee not found' });
       if (result.notFound) return res.status(404).json({ message: 'Maintenance work order not found' });
       if (result.invalidStatus) return res.status(409).json({ message: 'Completed or cancelled work orders cannot be updated' });
-      if (result.invalidTime) return res.status(400).json({ message: 'Invalid asset state transition time' });
       return res.status(200).json({ workOrder: result.workOrder });
     })
     .catch(() => res.status(500).json({ message: 'Failed to update maintenance work order' }));
@@ -482,27 +466,25 @@ router.post('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrd
         });
 
         if (parsed.data.requested_state) {
-          const stateResult = await transitionAssetState(trx, {
+          await transitionAssetState(trx, {
             organizationId,
             assetId,
             toState: parsed.data.requested_state,
             occurredAt: parsed.data.started_at ? new Date(parsed.data.started_at) : new Date(),
             note: `Maintenance work order #${workOrderId} started`
           });
-          if (stateResult.invalidTime) return { invalidTime: true };
         }
 
         return workOrder;
       });
 
-      if (updated?.notFound || updated?.invalidStatus || updated?.invalidTime) return updated;
+      if (updated?.notFound || updated?.invalidStatus) return updated;
       const workOrder = await getMaintenanceWorkOrderById(organizationId, updated.id);
       return { workOrder };
     })
     .then((result) => {
       if (result.notFound) return res.status(404).json({ message: 'Maintenance work order not found' });
       if (result.invalidStatus) return res.status(409).json({ message: 'Only open work orders can be started' });
-      if (result.invalidTime) return res.status(400).json({ message: 'Invalid asset state transition time' });
       return res.status(200).json({ workOrder: result.workOrder });
     })
     .catch(() => res.status(500).json({ message: 'Failed to start maintenance work order' }));
@@ -666,7 +648,6 @@ router.post('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrd
           occurredAt: completedAt,
           note: `Maintenance work order #${workOrderId} completed`
         });
-        if (stateResult.invalidTime) return { invalidTime: true };
         if (stateResult.notFoundAsset) return { notFound: true };
 
         return {
@@ -683,8 +664,7 @@ router.post('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrd
         updated?.badItem ||
         updated?.badItemType ||
         updated?.badSourceNode ||
-        updated?.badSourceNodeType ||
-        updated?.invalidTime
+        updated?.badSourceNodeType
       ) {
         return updated;
       }
@@ -712,7 +692,6 @@ router.post('/organizations/:id/assets/:assetId/maintenance-work-orders/:workOrd
       if (result.badItemType) return res.status(400).json({ message: 'Only equipment items can be consumed in maintenance' });
       if (result.badSourceNode) return res.status(404).json({ message: 'Source warehouse node not found' });
       if (result.badSourceNodeType) return res.status(400).json({ message: 'Source node must be a warehouse' });
-      if (result.invalidTime) return res.status(400).json({ message: 'Invalid asset state transition time' });
       return res.status(200).json({ workOrder: result.workOrder, parts: result.parts });
     })
     .catch(() => res.status(500).json({ message: 'Failed to complete maintenance work order' }));

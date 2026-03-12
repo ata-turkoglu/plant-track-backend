@@ -30,6 +30,80 @@ function isUniqueViolation(err) {
   return code === '23505';
 }
 
+function normalizeRuntimeMeterUnit(value) {
+  return value === 'KM' ? 'KM' : 'HOUR';
+}
+
+async function findHierarchyConflictForAssetCardRuntimeUnitChange(trx, { organizationId, assetCardId, nextRuntimeMeterUnit }) {
+  const parentConflict = await trx('assets as a')
+    .join('assets as p', function joinParent() {
+      this.on('p.id', '=', 'a.parent_asset_id').andOn('p.organization_id', '=', 'a.organization_id');
+    })
+    .where({ 'a.organization_id': organizationId, 'a.asset_card_id': assetCardId })
+    .andWhereRaw(
+      `
+        (
+          case
+            when p.asset_card_id = ? then ?
+            when p.runtime_meter_unit = 'KM' then 'KM'
+            else 'HOUR'
+          end
+        ) <> ?
+      `,
+      [assetCardId, nextRuntimeMeterUnit, nextRuntimeMeterUnit]
+    )
+    .first([
+      'a.id as asset_id',
+      'a.name as asset_name',
+      'p.id as related_asset_id',
+      'p.name as related_asset_name',
+      'p.runtime_meter_unit as related_runtime_meter_unit'
+    ]);
+
+  if (parentConflict) {
+    return {
+      edge: 'PARENT',
+      ...parentConflict,
+      related_runtime_meter_unit: normalizeRuntimeMeterUnit(parentConflict.related_runtime_meter_unit)
+    };
+  }
+
+  const childConflict = await trx('assets as a')
+    .join('assets as c', function joinChild() {
+      this.on('c.parent_asset_id', '=', 'a.id').andOn('c.organization_id', '=', 'a.organization_id');
+    })
+    .where({ 'a.organization_id': organizationId, 'a.asset_card_id': assetCardId })
+    .andWhereRaw(
+      `
+        (
+          case
+            when c.asset_card_id = ? then ?
+            when c.runtime_meter_unit = 'KM' then 'KM'
+            else 'HOUR'
+          end
+        ) <> ?
+      `,
+      [assetCardId, nextRuntimeMeterUnit, nextRuntimeMeterUnit]
+    )
+    .first([
+      'a.id as asset_id',
+      'a.name as asset_name',
+      'c.id as related_asset_id',
+      'c.name as related_asset_name',
+      'c.runtime_meter_unit as related_runtime_meter_unit'
+    ]);
+
+  if (childConflict) {
+    return {
+      edge: 'CHILD',
+      ...childConflict,
+      related_runtime_meter_unit: normalizeRuntimeMeterUnit(childConflict.related_runtime_meter_unit)
+    };
+  }
+
+  return null;
+}
+
 router.get('/organizations/:id/asset-cards', (req, res) => {
   const organizationId = req.organizationId;
 
@@ -172,6 +246,7 @@ const upsertSchema = z.object({
   code: z.string().trim().min(1).max(64),
   name: z.string().trim().min(1).max(255),
   description: z.string().max(10_000).optional().nullable(),
+  runtime_meter_unit: z.enum(['HOUR', 'KM']).optional(),
   fields: z
     .array(
       z.object({
@@ -207,6 +282,7 @@ router.post('/organizations/:id/asset-cards', (req, res) => {
           code: parsed.data.code,
           name: parsed.data.name,
           description: parsed.data.description?.trim() || null,
+          runtimeMeterUnit: parsed.data.runtime_meter_unit,
           fields
         })
       );
@@ -235,7 +311,7 @@ router.put('/organizations/:id/asset-cards/:assetCardId', (req, res) => {
 
   return Promise.resolve()
     .then(async () => {
-      const existing = await db('asset_cards').where({ id: assetCardId, organization_id: organizationId }).first(['id']);
+      const existing = await db('asset_cards').where({ id: assetCardId, organization_id: organizationId }).first(['id', 'runtime_meter_unit']);
       if (!existing) return { notFound: true };
 
       const conflict = await db('asset_cards')
@@ -246,22 +322,76 @@ router.put('/organizations/:id/asset-cards/:assetCardId', (req, res) => {
       if (conflict) return { conflict: true };
 
       const fields = normalizeFields(parsed.data.fields ?? []);
+      const prevRuntimeUnit = normalizeRuntimeMeterUnit(existing.runtime_meter_unit);
+      const nextRuntimeUnit = normalizeRuntimeMeterUnit(parsed.data.runtime_meter_unit ?? existing.runtime_meter_unit);
       const updated = await db.transaction((trx) =>
-        updateAssetCard(trx, {
-          organizationId,
-          assetCardId,
-          code: parsed.data.code,
-          name: parsed.data.name,
-          description: parsed.data.description?.trim() || null,
-          fields
-        })
+        Promise.resolve()
+          .then(async () => {
+            const shouldSyncRuntimeUnit = nextRuntimeUnit !== prevRuntimeUnit;
+            if (!shouldSyncRuntimeUnit) return null;
+
+            const hierarchyConflict = await findHierarchyConflictForAssetCardRuntimeUnitChange(trx, {
+              organizationId,
+              assetCardId,
+              nextRuntimeMeterUnit: nextRuntimeUnit
+            });
+            return hierarchyConflict;
+          })
+          .then(async (hierarchyConflict) => {
+            if (hierarchyConflict) return { hierarchyConflict };
+
+            const assetCard = await updateAssetCard(trx, {
+              organizationId,
+              assetCardId,
+              code: parsed.data.code,
+              name: parsed.data.name,
+              description: parsed.data.description?.trim() || null,
+              runtimeMeterUnit: parsed.data.runtime_meter_unit,
+              fields
+            });
+            if (!assetCard) return { assetCard: null };
+
+            const shouldSyncRuntimeUnit = nextRuntimeUnit !== prevRuntimeUnit;
+            if (!shouldSyncRuntimeUnit) return { assetCard };
+
+            await trx('assets')
+              .where({ organization_id: organizationId, asset_card_id: assetCardId })
+              .update({ runtime_meter_unit: nextRuntimeUnit, updated_at: trx.fn.now() });
+
+            await trx.raw(
+              `
+                update nodes n
+                set meta_json = jsonb_set(coalesce(n.meta_json, '{}'::jsonb), '{runtime_meter_unit}', to_jsonb(?::text), true),
+                    updated_at = now()
+                from assets a
+                where a.organization_id = ?
+                  and a.asset_card_id = ?
+                  and n.organization_id = a.organization_id
+                  and n.node_type = 'ASSET'
+                  and n.ref_table = 'assets'
+                  and n.ref_id = a.id::text
+              `,
+              [nextRuntimeUnit, organizationId, assetCardId]
+            );
+
+            return { assetCard };
+          })
       );
 
-      return { assetCard: updated };
+      return updated?.hierarchyConflict ? { hierarchyConflict: updated.hierarchyConflict } : { assetCard: updated?.assetCard ?? null };
     })
     .then((result) => {
       if (result.notFound) return res.status(404).json({ message: 'Asset card not found' });
       if (result.conflict) return res.status(409).json({ message: 'Asset card code already exists' });
+      if (result.hierarchyConflict) {
+        return res.status(409).json({
+          message: 'Runtime meter unit change would break parent-child unit consistency',
+          edge: result.hierarchyConflict.edge,
+          asset_id: result.hierarchyConflict.asset_id,
+          related_asset_id: result.hierarchyConflict.related_asset_id,
+          related_runtime_meter_unit: result.hierarchyConflict.related_runtime_meter_unit
+        });
+      }
       if (!result.assetCard) return res.status(404).json({ message: 'Asset card not found' });
       return res.status(200).json({ assetCard: result.assetCard });
     })

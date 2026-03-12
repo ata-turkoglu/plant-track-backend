@@ -1,6 +1,6 @@
 import db from '../db/knex.js';
 
-const ASSET_CARD_COLUMNS = ['id', 'organization_id', 'code', 'name', 'description', 'created_at', 'updated_at'];
+const ASSET_CARD_COLUMNS = ['id', 'organization_id', 'code', 'name', 'description', 'runtime_meter_unit', 'created_at', 'updated_at'];
 const ASSET_CARD_FIELD_COLUMNS = [
   'id',
   'organization_id',
@@ -112,13 +112,14 @@ export async function listAssetCardsByOrganization(organizationId, { q, code, na
   return attachFields(rows, fields);
 }
 
-export async function createAssetCard(trx, { organizationId, code, name, description, fields }) {
+export async function createAssetCard(trx, { organizationId, code, name, description, runtimeMeterUnit, fields }) {
   const rows = await trx('asset_cards')
     .insert({
       organization_id: organizationId,
       code,
       name,
-      description: description ?? null
+      description: description ?? null,
+      runtime_meter_unit: runtimeMeterUnit === 'KM' ? 'KM' : 'HOUR'
     })
     .returning(ASSET_CARD_COLUMNS);
 
@@ -127,15 +128,18 @@ export async function createAssetCard(trx, { organizationId, code, name, descrip
   return { ...assetCard, fields: fieldRows };
 }
 
-export async function updateAssetCard(trx, { organizationId, assetCardId, code, name, description, fields }) {
+export async function updateAssetCard(trx, { organizationId, assetCardId, code, name, description, runtimeMeterUnit, fields }) {
+  const patch = {
+    code,
+    name,
+    description: description ?? null,
+    updated_at: trx.fn.now()
+  };
+  if (runtimeMeterUnit === 'HOUR' || runtimeMeterUnit === 'KM') patch.runtime_meter_unit = runtimeMeterUnit;
+
   const rows = await trx('asset_cards')
     .where({ id: assetCardId, organization_id: organizationId })
-    .update({
-      code,
-      name,
-      description: description ?? null,
-      updated_at: trx.fn.now()
-    })
+    .update(patch)
     .returning(ASSET_CARD_COLUMNS);
 
   const assetCard = rows[0] ?? null;

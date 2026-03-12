@@ -18,8 +18,8 @@ export async function listAssetsByOrganization(
       'name',
       'image_url',
       'current_state',
-      'running_since',
-      'runtime_seconds',
+      'runtime_meter_value',
+      'runtime_meter_unit',
       'attributes_json',
       'created_at',
       'updated_at'
@@ -72,7 +72,7 @@ function resolveAssetOrder(sortField, sortOrder) {
     name: 'name',
     code: 'code',
     current_state: 'current_state',
-    runtime_seconds: 'runtime_seconds'
+    runtime_meter_value: 'runtime_meter_value'
   };
   const column = columnMap[sortField] ?? 'name';
 
@@ -95,8 +95,8 @@ export async function getAssetById(organizationId, assetId) {
       'name',
       'image_url',
       'current_state',
-      'running_since',
-      'runtime_seconds',
+      'runtime_meter_value',
+      'runtime_meter_unit',
       'attributes_json',
       'created_at',
       'updated_at'
@@ -105,7 +105,7 @@ export async function getAssetById(organizationId, assetId) {
 
 export async function createAsset(
   trx,
-  { organizationId, locationId, parentAssetId, assetCardId, assetTypeId, code, name, imageUrl, attributesJson }
+  { organizationId, locationId, parentAssetId, assetCardId, assetTypeId, code, name, imageUrl, attributesJson, runtimeMeterValue, runtimeMeterUnit }
 ) {
   const resolvedAssetCardId = assetCardId ?? assetTypeId;
   const rows = await trx('assets')
@@ -119,8 +119,8 @@ export async function createAsset(
       image_url: imageUrl ?? null,
       attributes_json: attributesJson ?? null,
       current_state: 'STOPPED',
-      running_since: null,
-      runtime_seconds: 0
+      runtime_meter_value: Number.isFinite(Number(runtimeMeterValue)) ? Number(runtimeMeterValue) : 0,
+      runtime_meter_unit: runtimeMeterUnit ?? 'HOUR'
     })
     .returning([
       'id',
@@ -132,8 +132,8 @@ export async function createAsset(
       'name',
       'image_url',
       'current_state',
-      'running_since',
-      'runtime_seconds',
+      'runtime_meter_value',
+      'runtime_meter_unit',
       'attributes_json',
       'created_at',
       'updated_at'
@@ -144,20 +144,28 @@ export async function createAsset(
 
 export async function updateAsset(
   trx,
-  { organizationId, assetId, parentAssetId, assetCardId, assetTypeId, code, name, imageUrl, attributesJson }
+  { organizationId, assetId, parentAssetId, assetCardId, assetTypeId, code, name, imageUrl, attributesJson, runtimeMeterValue, runtimeMeterUnit }
 ) {
   const resolvedAssetCardId = assetCardId ?? assetTypeId;
+  const patch = {
+    parent_asset_id: parentAssetId ?? null,
+    asset_card_id: resolvedAssetCardId ?? null,
+    code: code ?? null,
+    name,
+    image_url: imageUrl ?? null,
+    attributes_json: attributesJson ?? null,
+    updated_at: trx.fn.now()
+  };
+  if (Number.isFinite(Number(runtimeMeterValue)) && Number(runtimeMeterValue) >= 0) {
+    patch.runtime_meter_value = Number(runtimeMeterValue);
+  }
+  if (runtimeMeterUnit === 'HOUR' || runtimeMeterUnit === 'KM') {
+    patch.runtime_meter_unit = runtimeMeterUnit;
+  }
+
   const rows = await trx('assets')
     .where({ id: assetId, organization_id: organizationId })
-    .update({
-      parent_asset_id: parentAssetId ?? null,
-      asset_card_id: resolvedAssetCardId ?? null,
-      code: code ?? null,
-      name,
-      image_url: imageUrl ?? null,
-      attributes_json: attributesJson ?? null,
-      updated_at: trx.fn.now()
-    })
+    .update(patch)
     .returning([
       'id',
       'organization_id',
@@ -168,8 +176,8 @@ export async function updateAsset(
       'name',
       'image_url',
       'current_state',
-      'running_since',
-      'runtime_seconds',
+      'runtime_meter_value',
+      'runtime_meter_unit',
       'attributes_json',
       'created_at',
       'updated_at'
@@ -187,7 +195,7 @@ export async function lockAssetForUpdate(trx, { organizationId, assetId }) {
   return trx('assets')
     .where({ id: assetId, organization_id: organizationId })
     .forUpdate()
-    .first(['id', 'location_id', 'current_state', 'running_since', 'runtime_seconds', 'code', 'name', 'asset_card_id', 'parent_asset_id']);
+    .first(['id', 'location_id', 'current_state', 'runtime_meter_value', 'runtime_meter_unit', 'code', 'name', 'asset_card_id', 'parent_asset_id']);
 }
 
 export async function updateAssetLocation(trx, { organizationId, assetId, toLocationId }) {
@@ -204,8 +212,8 @@ export async function updateAssetLocation(trx, { organizationId, assetId, toLoca
       'name',
       'image_url',
       'current_state',
-      'running_since',
-      'runtime_seconds',
+      'runtime_meter_value',
+      'runtime_meter_unit',
       'attributes_json',
       'created_at',
       'updated_at'
@@ -213,19 +221,8 @@ export async function updateAssetLocation(trx, { organizationId, assetId, toLoca
   return rows[0] ?? null;
 }
 
-export async function updateAssetState(trx, { organizationId, assetId, currentState, runningSince, runtimeSeconds, toState, occurredAt }) {
-  // NOTE: This function expects the caller to lock/read the current row to compute correct transitions.
+export async function updateAssetState(trx, { organizationId, assetId, toState }) {
   const updates = { current_state: toState, updated_at: trx.fn.now() };
-
-  if (toState === 'RUNNING') {
-    updates.running_since = occurredAt;
-  } else {
-    updates.running_since = null;
-    if (currentState === 'RUNNING' && runningSince) {
-      const deltaSeconds = Math.floor((new Date(occurredAt).getTime() - new Date(runningSince).getTime()) / 1000);
-      updates.runtime_seconds = Number(runtimeSeconds ?? 0) + Math.max(0, deltaSeconds);
-    }
-  }
 
   const rows = await trx('assets')
     .where({ id: assetId, organization_id: organizationId })
@@ -240,8 +237,8 @@ export async function updateAssetState(trx, { organizationId, assetId, currentSt
       'name',
       'image_url',
       'current_state',
-      'running_since',
-      'runtime_seconds',
+      'runtime_meter_value',
+      'runtime_meter_unit',
       'attributes_json',
       'created_at',
       'updated_at'
