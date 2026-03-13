@@ -22,6 +22,7 @@ import translationsRoutes from './routes/translations.js';
 import assetsRoutes from './routes/assets.js';
 import assetCardsRoutes from './routes/assetCards.js';
 import maintenanceWorkOrdersRoutes from './routes/maintenanceWorkOrders.js';
+import maintenancePlansRoutes from './routes/maintenancePlans.js';
 import {
   ensureLocalBucketRootDir,
   getLocalBucketPublicBasePath,
@@ -69,6 +70,7 @@ app.use('/api', translationsRoutes);
 app.use('/api', assetsRoutes);
 app.use('/api', assetCardsRoutes);
 app.use('/api', maintenanceWorkOrdersRoutes);
+app.use('/api', maintenancePlansRoutes);
 
 app.use((_req, res) => {
   res.status(404).json({ message: 'Not found' });

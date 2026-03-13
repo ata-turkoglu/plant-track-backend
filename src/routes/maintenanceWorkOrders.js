@@ -204,6 +204,18 @@ const workOrderUpsertSchema = z.object({
   requested_state: z.enum(['MAINTENANCE', 'DOWN']).optional().nullable()
 });
 
+const periodicPlanSchema = z.object({
+  asset_id: z.number().int().positive(),
+  title: z.string().trim().min(1).max(255),
+  note: z.string().max(8000).optional().nullable(),
+  first_planned_at: z.string().datetime(),
+  interval_days: z.number().int().positive().max(3650),
+  occurrences: z.number().int().positive().max(120),
+  priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']).optional().default('MEDIUM'),
+  assigned_firm_id: z.number().int().positive().optional().nullable(),
+  assigned_employee_ids: z.array(z.number().int().positive()).optional()
+});
+
 function normalizeAssignedEmployeeIds(values) {
   if (!Array.isArray(values)) return [];
   const unique = new Set();
@@ -223,6 +235,85 @@ async function validateAssignedEmployees(organizationId, assignedEmployeeIds) {
     .select(['id']);
   return employees.length === assignedEmployeeIds.length;
 }
+
+function addDaysUtc(baseDate, days) {
+  const next = new Date(baseDate);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+router.post('/organizations/:id/maintenance-work-orders/periodic-plan', (req, res) => {
+  const organizationId = req.organizationId;
+  const createdByUserId = req.user?.id ?? null;
+  const parsed = periodicPlanSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: 'Validation failed', errors: parsed.error.flatten() });
+
+  const assetId = Number(parsed.data.asset_id);
+  const title = parsed.data.title.trim();
+  const note = parsed.data.note?.trim() || null;
+  const intervalDays = Number(parsed.data.interval_days);
+  const occurrences = Number(parsed.data.occurrences);
+  const assignedFirmId = parsed.data.assigned_firm_id ?? null;
+  const assignedEmployeeIds = normalizeAssignedEmployeeIds(parsed.data.assigned_employee_ids ?? []);
+  const firstPlannedAt = new Date(parsed.data.first_planned_at);
+
+  if (!Number.isFinite(firstPlannedAt.getTime())) {
+    return res.status(400).json({ message: 'Validation failed', errors: { fieldErrors: { first_planned_at: ['Invalid date'] } } });
+  }
+
+  return Promise.resolve()
+    .then(async () => {
+      const asset = await db('assets').where({ id: assetId, organization_id: organizationId }).first(['id']);
+      if (!asset) return { notFoundAsset: true };
+
+      if (assignedFirmId) {
+        const firm = await db('firms').where({ id: assignedFirmId, organization_id: organizationId }).first(['id']);
+        if (!firm) return { notFoundFirm: true };
+      }
+
+      const hasValidEmployees = await validateAssignedEmployees(organizationId, assignedEmployeeIds);
+      if (!hasValidEmployees) return { invalidEmployees: true };
+
+      const result = await db.transaction(async (trx) => {
+        const createdIds = [];
+
+        for (let index = 0; index < occurrences; index += 1) {
+          const plannedAt = addDaysUtc(firstPlannedAt, intervalDays * index);
+          const orderTitle = occurrences > 1 ? `${title} (${index + 1}/${occurrences})` : title;
+
+          const created = await createMaintenanceWorkOrder(trx, {
+            organizationId,
+            assetId,
+            type: 'PREVENTIVE',
+            priority: parsed.data.priority ?? 'MEDIUM',
+            title: orderTitle,
+            symptom: null,
+            note,
+            openImagesJson: [],
+            plannedAt,
+            assignedFirmId,
+            assignedEmployeeIds,
+            createdByUserId
+          });
+          if (created?.id) createdIds.push(Number(created.id));
+        }
+
+        return { createdIds };
+      });
+
+      return result;
+    })
+    .then((result) => {
+      if (result.notFoundAsset) return res.status(404).json({ message: 'Asset not found' });
+      if (result.notFoundFirm) return res.status(404).json({ message: 'Assigned firm not found' });
+      if (result.invalidEmployees) return res.status(400).json({ message: 'Assigned employees are invalid' });
+      return res.status(201).json({
+        created_count: result.createdIds.length,
+        work_order_ids: result.createdIds
+      });
+    })
+    .catch(() => res.status(500).json({ message: 'Failed to create periodic maintenance plan' }));
+});
 
 router.get('/organizations/:id/assets/:assetId/maintenance-work-orders', (req, res) => {
   const organizationId = req.organizationId;

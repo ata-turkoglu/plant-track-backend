@@ -33,6 +33,7 @@ import {
   listAssetBomLines,
   updateAssetBomLine
 } from '../models/assetBom.js';
+import { processRuntimeMaintenancePlans } from '../models/maintenancePlans.js';
 
 const router = Router();
 router.use('/organizations/:id', loadOrganizationContext);
@@ -311,6 +312,7 @@ const runtimeAdjustmentSchema = z.object({
 
 router.post('/organizations/:id/assets/runtime-adjustments', (req, res) => {
   const organizationId = req.organizationId;
+  const createdByUserId = req.user?.id ?? null;
   const parsed = runtimeAdjustmentSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ message: 'Validation failed', errors: parsed.error.flatten() });
 
@@ -381,7 +383,17 @@ router.post('/organizations/:id/assets/runtime-adjustments', (req, res) => {
           [organizationId, updatedIds]
         );
 
-        return { updatedIds };
+        const maintenancePlanResult = await processRuntimeMaintenancePlans(trx, {
+          organizationId,
+          assetIds: updatedIds,
+          createdByUserId
+        });
+
+        return {
+          updatedIds,
+          createdWorkOrderIds: maintenancePlanResult.createdWorkOrderIds,
+          triggeredPlanIds: maintenancePlanResult.triggeredPlanIds
+        };
       });
 
       return result;
@@ -390,7 +402,11 @@ router.post('/organizations/:id/assets/runtime-adjustments', (req, res) => {
       if (result.notFound) return res.status(404).json({ message: 'Assets not found' });
       return res.status(200).json({
         updated_count: result.updatedIds.length,
-        asset_ids: result.updatedIds
+        asset_ids: result.updatedIds,
+        triggered_plan_count: result.triggeredPlanIds.length,
+        triggered_plan_ids: result.triggeredPlanIds,
+        created_work_order_count: result.createdWorkOrderIds.length,
+        created_work_order_ids: result.createdWorkOrderIds
       });
     })
     .catch(() => res.status(500).json({ message: 'Failed to apply runtime adjustment' }));
@@ -560,6 +576,7 @@ const updateSchema = z.object({
 
 router.put('/organizations/:id/assets/:assetId', (req, res) => {
   const organizationId = req.organizationId;
+  const createdByUserId = req.user?.id ?? null;
   const assetId = Number(req.params.assetId);
   if (!Number.isFinite(assetId)) return res.status(400).json({ message: 'Invalid asset id' });
 
@@ -650,6 +667,7 @@ router.put('/organizations/:id/assets/:assetId', (req, res) => {
 
       const runtimeMeterUnitForUpdate = runtimeUnitChanged ? nextRuntimeMeterUnit : undefined;
 
+      const runtimeValueProvided = parsed.data.runtime_meter_value !== undefined;
       const asset = await db.transaction(async (trx) => {
         const updated = await updateAsset(trx, {
           organizationId,
@@ -676,11 +694,20 @@ router.put('/organizations/:id/assets/:assetId', (req, res) => {
           metaJson: buildAssetNodeMeta(updated)
         });
 
-        return updated;
+        if (!runtimeValueProvided) return { updatedAsset: updated, maintenancePlanResult: null };
+
+        const maintenancePlanResult = await processRuntimeMaintenancePlans(trx, {
+          organizationId,
+          assetIds: [updated.id],
+          createdByUserId
+        });
+
+        return { updatedAsset: updated, maintenancePlanResult };
       });
 
       return {
-        asset,
+        asset: asset?.updatedAsset ?? null,
+        maintenancePlanResult: asset?.maintenancePlanResult ?? null,
         previousImageUrl: existing.image_url ?? null,
         nextImageUrl: imageUrl ?? null
       };
@@ -717,7 +744,13 @@ router.put('/organizations/:id/assets/:assetId', (req, res) => {
         await deleteLocalBucketObjectByPublicUrl(result.previousImageUrl).catch(() => {});
       }
 
-      return res.status(200).json({ asset: result.asset });
+      return res.status(200).json({
+        asset: result.asset,
+        triggered_plan_count: result.maintenancePlanResult?.triggeredPlanIds?.length ?? 0,
+        triggered_plan_ids: result.maintenancePlanResult?.triggeredPlanIds ?? [],
+        created_work_order_count: result.maintenancePlanResult?.createdWorkOrderIds?.length ?? 0,
+        created_work_order_ids: result.maintenancePlanResult?.createdWorkOrderIds ?? []
+      });
     })
     .catch(() => res.status(500).json({ message: 'Failed to update asset' }));
 });
