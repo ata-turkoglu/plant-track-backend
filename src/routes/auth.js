@@ -5,7 +5,7 @@ import { z } from 'zod';
 import db from '../db/knex.js';
 import { createOrganization } from '../models/organizations.js';
 import { ensureDefaultLocationTypesForOrganization } from '../models/locationTypes.js';
-import { createUser, getUserByEmail, getUserById, updateUserDefaultCurrency } from '../models/users.js';
+import { createUser, getUserByEmail, getUserById, updateUserProfile } from '../models/users.js';
 
 const router = Router();
 
@@ -159,6 +159,7 @@ router.get('/auth/profile', (req, res) => {
 
 const updateProfileSchema = z.object({
   user_id: z.number().int().positive(),
+  name: z.string().trim().min(2).max(120),
   default_currency_code: z.string().trim().min(1).max(8).nullable()
 });
 
@@ -177,6 +178,7 @@ router.put('/auth/profile', (req, res) => {
       const user = await getUserById(parsed.data.user_id);
       if (!user) return { notFound: true };
 
+      const nextName = parsed.data.name.trim();
       const nextCurrencyCode = parsed.data.default_currency_code?.trim().toUpperCase() || null;
       if (nextCurrencyCode) {
         const currency = await db('currencies')
@@ -187,9 +189,10 @@ router.put('/auth/profile', (req, res) => {
       }
 
       const updated = await db.transaction((trx) =>
-        updateUserDefaultCurrency(trx, {
+        updateUserProfile(trx, {
           userId: user.id,
           organizationId: user.organization_id,
+          name: nextName,
           defaultCurrencyCode: nextCurrencyCode
         })
       );

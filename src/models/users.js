@@ -27,10 +27,11 @@ export async function getUserById(id) {
   return db('users').where({ id }).first(USER_COLUMNS);
 }
 
-export async function updateUserDefaultCurrency(trx, { userId, organizationId, defaultCurrencyCode }) {
+export async function updateUserProfile(trx, { userId, organizationId, name, defaultCurrencyCode }) {
   const rows = await trx('users')
     .where({ id: userId, organization_id: organizationId })
     .update({
+      name,
       default_currency_code: defaultCurrencyCode ?? null,
       updated_at: trx.fn.now()
     })
